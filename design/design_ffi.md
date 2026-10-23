@@ -73,12 +73,12 @@ extern "C" function abs(x: int): int
 * **`#[link_name = "..."]`**: C 側のシンボル名と Kyanos 側の関数名が異なる場合に、C側の物理シンボル名を明示。
 
 ```typescript
-// sqlite3 ライブラリをリンク
+// Link against sqlite3 library
 #[link(name = "sqlite3")]
 extern "C" {
-    // Kyanos 側では `sqliteOpen` として参照し、リンク時は `sqlite3_open` を解決
+    // Referenced as `sqliteOpen` in Kyanos, resolved to `sqlite3_open` at link time
     #[link_name = "sqlite3_open"]
-    function sqliteOpen(filename: *const ubyte, ppDb: *mut rawptr): int
+    function sqliteOpen(filename: *const ubyte, ppDb: *rawptr): int
 
     #[link_name = "sqlite3_close"]
     function sqliteClose(pDb: rawptr): int
@@ -274,7 +274,7 @@ C 言語には Kyanos の高度なランタイム概念（ORC管理クラス、�
 | :--- | :--- |
 | **プリミティブ型** | `int`, `double`, `bool`, `size_t` 等の固定サイズ数値型 |
 | **C 互換型エイリアス** | `c_int`, `c_long`, `c_char` 等 |
-| **生ポインタ** | `*T`, `*const T`, `*mut T`, `rawptr` (`void*`) |
+| **生ポインタ** | `*T` (可変), `*const T` (不変), `rawptr` (`void*`) |
 | **C 互換構造体 (`struct`)** | C レイアウトを持つ値型構造体（`#[repr(union)] struct` を含む） |
 | **構造体内の固定長配列 (`T[N]`)** | `struct` フィールドとしてインライン展開される固定長配列 |
 | **単純な数値列挙型 (`enum`)** | ペイロードを持たない数値 `enum`（デフォルトは `int` (32bit)、`enum Flags : uint` のように基底整数型の明示も可） |
@@ -292,13 +292,13 @@ C 言語には Kyanos の高度なランタイム概念（ORC管理クラス、�
 // ❌ コンパイルエラー例
 export extern "C" function badFunction(s: string, arr: int[]): Result<int, string> { ... }
 
-// ⭕ 正しい C-ABI 互換の記述
+// ⭕ Correct C-ABI compatible declaration
 export extern "C" function goodFunction(
-    s: *const ubyte,     // C 文字列
-    arr: *const int,     // 配列先頭ポインタ
-    len: size_t,         // 配列の長さ
-    outResult: *mut int  // 出力先ポインタ
-): int {                 // エラーコード (0: 成功, その他: エラー)
+    s: *const ubyte,     // C string (immutable pointer)
+    arr: *const int,     // Array head pointer (immutable pointer)
+    len: size_t,         // Array length
+    outResult: *int      // Output parameter (mutable pointer)
+): int {                 // Error code (0: success, others: error)
     if (s == null || arr == null || outResult == null) {
         return -1
     }
@@ -357,7 +357,7 @@ Kyanos の関数内で回復不能なパニック（ゼロ除算、配列範囲�
 | `double` | `double` (`f64`) | 8 | 倍精度浮動小数点数 |
 | `bool` (`_Bool`) | `bool` | 1 | 真偽値 (`true`=1, `false`=0) |
 | `void*` | `rawptr` | ポインタ幅 (4 or 8) | 任意の型を指す汎用生ポインタ |
-| `T*` | `*T` / `*mut T` | ポインタ幅 (4 or 8) | 可変生ポインタ |
+| `T*` | `*T` | ポインタ幅 (4 or 8) | 可変生ポインタ |
 | `const T*` | `*const T` | ポインタ幅 (4 or 8) | 不変生ポインタ |
 | `void` (戻り値) | `void` | 0 | 戻り値なし |
 
@@ -552,7 +552,7 @@ class SafeSqliteDb implements Disposable {
     public static open(path: string): Result<SafeSqliteDb, int> {
         let handle: rawptr = null
         let cPath = path.toCString()
-        let rc = unsafe { sqliteOpen(cPath.asPtr(), &handle as *mut rawptr) }
+        let rc = unsafe { sqliteOpen(cPath.asPtr(), &handle) }
         if (rc != 0) {
             return Err(rc)
         }

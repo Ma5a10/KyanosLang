@@ -76,7 +76,7 @@
     1. **静的単相化 (Monomorphization)**: ジェネリクス（`<T extends HasPosition>` 等）では具象型ごとに専用コードを直接インライン展開し、ボクシングなしの最高速（ゼロコスト）で実行。
     2. **動的ディスパッチ (Fat Pointer: データポインタ + vtable)**: インターフェース型の変数やコレクション要素として動的に受け渡す場合に使用。
     3. **値型の自動ボックス化 (Auto-Boxing / ORC管理)**: スタック上の値型（`struct` や匿名構造体）を動的インターフェース型に代入・変換する際、自動的にヒープへボックス化（ORC管理）される。これにより、インターフェースをクラスフィールドに保存したり関数から `return` した場合でも、スタック破棄によるダングリングポインタを原理的に防止。
-       - *補足（ボックス化と変更操作）*: 動的インターフェース変数に対して状態変更メソッドを呼び出した場合、更新されるのはヒープ上のボックス化コピー側であり、元のスタック上の `struct` 変数は変更されない（C# の Boxing と同様の挙動）。元の `struct` をインプレースで書き換えたい場合は、ジェネリクスによる静的単相化と可変参照（例: `function update<T extends Movable>(target: &mut T)`）を使用する。
+       - *補足（ボックス化と変更操作）*: 動的インターフェース変数に対して状態変更メソッドを呼び出した場合、更新されるのはヒープ上のボックス化コピー側であり、元のスタック上の `struct` 変数は変更されない（C# の Boxing と同様の挙動）。元の `struct` をインプレースで書き換えたい場合は、ジェネリクスによる静的単相化と可変参照（例: `function update<T extends Movable>(target: &T)`）を使用する。
 
 ```typescript
 // 1. 構造的型 (Structural): 形状に適合すればマッチ
@@ -149,9 +149,11 @@ flowchart BT
   - **C-FFI / 外部連携**:
     - C言語（`const char*`）や OS/ネットワークI/O（UTF-8 前提）と連携する際は、明示的な変換メソッド（`str.toUtf8(): ubyte[]`, `str.toCString(): CString` 等、ポインタ取得は `cStr.asPtr(): *const ubyte`）を利用。
 - **低レベルポインタ**: `*T` (可変生ポインタ), `*const T` (不変生ポインタ), `rawptr` (Cの `void*`)
-- **参照**: `&T` (不変参照), `&mut T` (可変参照)
-  - 主に値型（`struct`, `T[N]`）を関数引数として渡す際のコピー回避（ゼロコスト参照渡し）および呼び出し元変数のインプレース更新に使用。
-  - スタックの安全性を保証するため、参照は関数引数およびローカルスコープに限定（関数の戻り値やクラス/構造体フィールドへの保持は禁止する Second-class reference 規則）。
+- **参照**: `&T` (可変参照), `&const T` (不変参照)
+  - **`mut` キーワードの排除と `const` による統一**: ポインタ・参照ともに `mut` キーワードは設けず、`const` の有無（可変: `*T` / `&T`、不変: `*const T` / `&const T`）で一貫して表現する。
+  - **用途**: 主に値型（`struct`, `T[N]`）を関数引数として渡す際のコピー回避（ゼロコスト参照渡し）および呼び出し元変数のインプレース更新に使用。
+  - **呼び出し側構文（`&val` への統一）**: 参照渡し・アドレス取得の式は常に `&val` と記述する。`val` が `let`（可変変数）であれば `&T` / `*T` と `&const T` / `*const T` の両方に渡すことができ、`const`（不変変数）であれば不変の `&const T` / `*const T` にのみ渡せる（可変の `&T` / `*T` へ渡すとコンパイルエラー）。
+  - **Second-class reference 規則**: スタックの安全性を保証するため、参照は関数引数およびローカルスコープに限定（関数の戻り値やクラス/構造体フィールドへの保持は禁止）。
 - **空値**: `void`, `never`
 
 ### 3.4 列挙型・直和型とエラーハンドリング (Enums, Sum Types & Error Handling)
@@ -196,7 +198,7 @@ flowchart BT
   - 型注釈で要素数を明示した `let arr: int[5] = [1, 2, 3, 4, 5];` は固定長配列として扱われる。
   - **メモリモデル**: スタック上の**値型（ヒープ確保ゼロ）**。構造体（`struct`）メンバに含めた場合もインライン展開され、C言語の配列と1:1のバイナリ互換性を持つ。
   - サイズはコンパイル時に静的確定し、リサイズ不可。
-  - **引数受け渡し規則 (値コピー & 参照渡し)**: 関数引数に `arr: T[N]` をそのまま指定した場合は、C言語のようなポインタ退化（Array-to-Pointer Decay）は起こらず、`struct` と同様に**配列全体が値コピー（By-value Copy）**される。コピーのオーバーヘッドを避ける場合や呼び出し元配列を直接更新したい場合は、[3.3] で定義した参照（`&T[N]` または `&mut T[N]`）を明示的に使用する。
+  - **引数受け渡し規則 (値コピー & 参照渡し)**: 関数引数に `arr: T[N]` をそのまま指定した場合は、C言語のようなポインタ退化（Array-to-Pointer Decay）は起こらず、`struct` と同様に**配列全体が値コピー（By-value Copy）**される。コピーのオーバーヘッドを避ける場合や呼び出し元配列を直接更新したい場合は、[3.3] で定義した参照（不変参照 `&const T[N]` または可変参照 `&T[N]`）を明示的に使用する。
 * **スライス (`.slice()` メソッド)**:
   - **JavaScript 同様のシャローコピー**: 配列（`T[]`）や固定長配列（`T[N]`）に対する `.slice(start, end)` は、切り出した要素を持つ新しい動的配列（`T[]`、ヒープ/ORC管理）を生成して返却。
   - **安全性と直感性**: ライフタイムやダングリングポインタ（Use-After-Free）の懸念が原理的に存在せず、関数から自由に `return` 可能。文字列の `string.slice()` とも一貫した仕様。
@@ -262,7 +264,7 @@ TypeScript ライクなオブジェクト記法を、キーの記述形式によ
 ### 5.1 変数宣言 & 基本構文規則 (Variables & Syntax Rules)
 
 * **宣言キーワード**: `let`（可変変数）と `const`（再代入不可・不変変数）のみを採用。
-* **`var` の完全排除**: JavaScriptの `var` はサポートせず（構文エラー）。
+* **`var` および `mut` の完全排除**: JavaScript の `var` や Rust の `mut` はサポートせず（構文エラー）、変数宣言・参照・ポインタのすべてを `let` と `const` の概念で統一。
 * **セミコロン `;` と改行規則 (Swift 方式)**:
   - **改行によって文が終了**するため、文末のセミコロン `;` は省略可能。
   - 1行に複数の文を並べる場合のみ、区切り文字として `;` を使用。
@@ -489,11 +491,25 @@ function readFileSafely() {
     // スコープを抜けた瞬間に自動的に file.dispose() が実行される
 }
 
-// 4. ポインタ操作
-let val: int = 42
-let ptr: *int = &val
+// 4. Reference (&T / &const T) and Raw Pointer (*T / *const T) operations
+function increment(target: &int) {
+    target += 1
+}
 
-// ポインタ経由の値の読み書き
+function printValue(target: &const int) {
+    println(`Value: ${target}`)
+}
+
+let val: int = 42
+const fixedVal: int = 10
+
+increment(&val)        // OK: 'val' is declared with 'let', can pass as mutable reference '&int'
+printValue(&val)       // OK: 'let' variable can also pass as immutable reference '&const int'
+printValue(&fixedVal)  // OK: 'const' variable can pass as '&const int'
+// increment(&fixedVal) // Compile Error: cannot pass 'const' variable to mutable reference '&int'
+
+let ptr: *int = &val
+// Dereferencing raw pointer requires unsafe
 unsafe {
     *ptr = 100
 }
