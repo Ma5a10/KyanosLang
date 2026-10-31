@@ -330,3 +330,43 @@ if (optionalName != null) {
     // println(optionalName.length); // Compile Error: optionalName is now string? again
 }
 ```
+
+### 7.3 `is` 演算子とユーザー定義型ガード (`expr is Type` / `param is Type`)
+
+統一型階層（`Object`、派生 `class`、`interface`、`Option<T>`）における動的な型判定と静的な型の絞り込み（Type Narrowing）を統合するため、`is` キーワードによる **型検査式** および **型ガード述語（Type Predicate）** を提供する。
+
+1. **型検査式 (`expr is Type`)**:
+   * 式 `expr` が指定された型 `Type` のインスタンス（またはインターフェース実装・ボックス化された値型）であるかを判定し、`bool` を返す（JavaScript の `instanceof` と `typeof` を単一構文に統合）。
+   * `if` や三項演算子、`while` の条件式内で `x is Type` が真となるブランチでは、変数 `x` の静的な型が自動的に `Type` へ絞り込まれる（可変変数 `let` の再代入リセット・クロージャ境界ルールは 7.2 と同一）。
+2. **ユーザー定義型ガード (`function f(x: Base): x is Derived`)**:
+   * 関数・メソッドの戻り値型として `引数名 is 型`（Type Predicate）を記述可能（実行時の戻り値 ABI は `bool` と同一でオーバーヘッドゼロ）。
+   * その関数が `true` を返した分岐内において、対象引数の型を `Derived` に絞り込む。
+
+```typescript
+// 1. Type test expression (`expr is Type`) with automatic flow narrowing
+function processEntity(entity: Entity) {
+    if (entity is Player) {
+        // `entity` is narrowed from `Entity` to `Player`
+        println(`Player name: ${entity.playerName}`);
+    }
+}
+
+// 2. Unwrapping a boxed value from `Object`
+let boxed: Object = 42;
+if (boxed is int) {
+    // `boxed` is narrowed to unboxed `int`
+    println(`Doubled: ${boxed * 2}`);
+}
+
+// 3. User-defined type guard (`param is Type`)
+function isAdmin(user: User): user is AdminUser {
+    return user is AdminUser && user.canAccessAdmin();
+}
+
+function handleRequest(currentUser: User) {
+    if (isAdmin(currentUser)) {
+        // `currentUser` is narrowed to `AdminUser` via type predicate
+        currentUser.printRole();
+    }
+}
+```

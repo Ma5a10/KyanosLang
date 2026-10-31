@@ -135,6 +135,9 @@ flowchart BT
     1. **非ボックス化 (Unboxed by default)**: 通常の計算・変数保持・引数渡しでは、ヒープ割り当てを行わず LLVM のネイティブスカラー（`i32`, `double` 等）としてレジスタ/スタック上で直接処理。
     2. **静的呼び出し解決 (Devirtualization)**: プリミティブに対する `.toString()` 等の呼び出しは、仮想関数テーブル (vtable) を経由せず、コンパイル時に専用の関数（例: `Int32_toString(val)`) へ直接解決・インライン化される。
     3. **必要時のみのボクシング (Boxing / Unboxing)**: 明示的に `let obj: Object = 100;` のように参照型の基底として扱われる場合のみ、ヒープ上に一時ボックス化（ORC管理）される。ジェネリクスでは静的単相化 (Monomorphization) を行うため、ボクシングなしで最高速動作する。
+* **`is` 演算子による型検査とユーザー定義型ガード (`expr is Type` / `param is Type`)**:
+  - **式としての型判定 (`expr is Type`)**: JavaScript/TypeScript の `typeof` と `instanceof` を単一の `is` 演算子に統一。クラス継承階層、インターフェース適合、および `Object` にボックス化されたプリミティブ・構造体の実行時型判定をサポートし、`if (x is TargetType)` の条件分岐内で自動的に `x` の型を `TargetType` へ絞り込む。
+  - **型ガード述語 (`param is Type`)**: 関数やメソッドの戻り値型注釈として `param is Type`（実行時の実体は `bool`）を指定可能。呼び出し側の条件分岐において TypeScript 準拠のフロー型絞り込みを提供する。
 
 ### 3.3 プリミティブ型一覧
 プリミティブ型は C# 風の型名と Rust 風のエイリアス () 内のどちらでも定義可能。
