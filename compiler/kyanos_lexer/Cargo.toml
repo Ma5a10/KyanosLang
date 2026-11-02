@@ -1,0 +1,11 @@
+[package]
+name = "kyanos_lexer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+
+[dependencies]
+kyanos_ast = { workspace = true }

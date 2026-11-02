@@ -1,0 +1,17 @@
+[package]
+name = "kyanos_driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kyanos"
+path = "src/main.rs"
+
+[dependencies]
+kyanos_ast = { workspace = true }
+kyanos_lexer = { workspace = true }
+kyanos_parse = { workspace = true }
+kyanos_sema = { workspace = true }
+kyanos_codegen_llvm = { workspace = true }

@@ -1,0 +1,9 @@
+[package]
+name = "kyanos_sema"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kyanos_ast = { workspace = true }

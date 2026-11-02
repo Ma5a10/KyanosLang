@@ -1,0 +1,10 @@
+[package]
+name = "kyanos_codegen_llvm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kyanos_ast = { workspace = true }
+kyanos_sema = { workspace = true }

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "compiler/kyanos_ast",
+    "compiler/kyanos_lexer",
+    "compiler/kyanos_parse",
+    "compiler/kyanos_sema",
+    "compiler/kyanos_codegen_llvm",
+    "compiler/kyanos_driver",
+    "tests/compiler",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["KyanosLang Contributors"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates
+kyanos_ast = { path = "compiler/kyanos_ast" }
+kyanos_lexer = { path = "compiler/kyanos_lexer" }
+kyanos_parse = { path = "compiler/kyanos_parse" }
+kyanos_sema = { path = "compiler/kyanos_sema" }
+kyanos_codegen_llvm = { path = "compiler/kyanos_codegen_llvm" }
+kyanos_driver = { path = "compiler/kyanos_driver" }
