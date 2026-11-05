@@ -118,7 +118,7 @@ constDeclarationList:
 constDeclaration:
 	bindingTarget (Colon type_)? Assign singleExpression;
 
-bindingTarget: Identifier | tuplePattern | objectPattern;
+bindingTarget: Identifier | Underscore | tuplePattern | objectPattern;
 
 // Deterministic Resource Management (design.md Section 4.1 & 5.4):
 // - 'using' declaration (TypeScript 5.2 / C# style).

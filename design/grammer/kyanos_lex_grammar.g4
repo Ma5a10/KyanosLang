@@ -1,7 +1,6 @@
 lexer grammar kyanos_lex_grammar;
 
-// ============================================================================= Whitespace &
-// Comments =============================================================================
+// Whitespace & Comments
 
 Whitespace:
 	[ \t\u000B\u000C\u00A0\uFEFF\p{Zs}]+ -> channel(HIDDEN);
@@ -14,8 +13,7 @@ SingleLineComment:
 
 MultiLineComment: '/*' .*? '*/' -> channel(HIDDEN);
 
-// ============================================================================= Keywords (Strictly
-// KyanosLang Spec) =============================================================================
+// Keywords (Strictly KyanosLang Spec)
 
 Let: 'let';
 Const: 'const';
@@ -98,8 +96,7 @@ TypeVoid: 'void';
 TypeNever: 'never';
 TypeRawptr: 'rawptr';
 
-// ============================================================================= Operators &
-// Punctuators =============================================================================
+// Operators & Punctuators
 
 OpenBrace: '{';
 CloseBrace: '}';
@@ -169,9 +166,7 @@ Is: 'is';
 Typeof: 'typeof';
 Sizeof: 'sizeof';
 
-// ============================================================================= Literals (Numeric,
-// String, Char, C-String)
-// =============================================================================
+//Literals (Numeric,String, Char, C-String)
 
 // Float literal
 FloatLiteral:
@@ -194,12 +189,9 @@ BigIntLiteral:
 		| BinaryIntegerLiteral
 	) [nN];
 
-fragment DecimalIntegerLiteral:
-	'0'
-	| [1-9] ('_'? Digit)*;
+fragment DecimalIntegerLiteral: '0' | [1-9] ('_'? Digit)*;
 
-fragment HexIntegerLiteral:
-	'0' [xX] HexDigit ('_'? HexDigit)*;
+fragment HexIntegerLiteral: '0' [xX] HexDigit ('_'? HexDigit)*;
 
 fragment OctalIntegerLiteral:
 	'0' [oO] OctalDigit ('_'? OctalDigit)*;
@@ -240,14 +232,16 @@ fragment UnicodeEscape:
 	'u' HexDigit HexDigit HexDigit HexDigit
 	| 'u{' HexDigit+ '}';
 
-// ============================================================================= Identifiers
-// (Unicode ID_Start / ID_Continue supported)
-// =============================================================================
+// Identifiers(Unicode ID_Start / ID_Continue supported)
+// Note: A single '_' is tokenized as `Underscore` (wildcard/discard).
+// Identifiers starting with '_' must contain at least two characters (e.g. `_foo`, `__`).
 
-Identifier: IdentifierStart IdentifierPart*;
+Identifier:
+	IdentifierStart IdentifierPart*
+	| '_' IdentifierPart+;
 
-PrivateIdentifier: '#' IdentifierStart IdentifierPart*;
+PrivateIdentifier: '#' (IdentifierStart | '_') IdentifierPart*;
 
-fragment IdentifierStart: [\p{ID_Start}] | '$' | '_';
+fragment IdentifierStart: [\p{ID_Start}] | '$';
 
 fragment IdentifierPart: [\p{ID_Continue}] | '$';
