@@ -10,31 +10,31 @@ use kyanos_lexer::{Lexer, TokenKind};
 #[test]
 fn test_operators_continuous() {
     let mut lexer = Lexer::new("{}()[].;,:?_+-*/%&|~!< > =");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::OpenBrace));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::CloseBrace));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::OpenParen));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::CloseParen));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::OpenBracket));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::CloseBracket));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Dot));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Semicolon));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Comma));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Colon));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Question));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Underscore));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Plus));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Minus));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Star));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Slash));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Percent));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::And));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Bar));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Tilde));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Bang));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::LessThan));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::GreaterThan));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Assign));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Eof));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenBrace));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseBrace));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenParen));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseParen));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenBracket));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseBracket));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Dot));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Semicolon));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Comma));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Colon));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Question));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Underscore));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Plus));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Minus));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Star));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Slash));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Percent));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::And));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Bar));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Tilde));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Bang));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::LessThan));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::GreaterThan));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Assign));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Eof));
 }
 
 #[test]
@@ -87,15 +87,15 @@ fn test_scan_identifier() {
     // Single '_' should not be scanned as an identifier
     let mut wildcard_lexer = Lexer::new("_");
     assert_eq!(wildcard_lexer.scan_identifier_or_keyword(), None);
-    assert_eq!(wildcard_lexer.next_token(), Ok(TokenKind::Underscore));
+    assert_eq!(wildcard_lexer.next_token().map(|t| t.kind), Ok(TokenKind::Underscore));
 }
 
 #[test]
 fn test_next_token_identifier() {
     let mut lexer = Lexer::new("myVar + other");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Plus));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Plus));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
 }
 
 #[test]
@@ -354,13 +354,13 @@ fn test_line_terminators() {
     assert!(!Lexer::is_line_terminator('a'));
 
     let mut lexer = Lexer::new("a\r\nb\nc\rd\u{2028}e\u{2029}f");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Eof));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Eof));
 
     let tokens = tokenize("let x: int = y;\n\r\n  let z: int = w;").unwrap();
     assert_eq!(
@@ -387,15 +387,15 @@ fn test_line_terminators() {
 #[test]
 fn test_single_line_comment() {
     let mut lexer = Lexer::new("// this is a comment\nlet");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::SingleLineComment));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Let));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::SingleLineComment));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Let));
 }
 
 #[test]
 fn test_multi_line_comment() {
     let mut lexer = Lexer::new("/* comment\nline2 */ let");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::MultiLineComment));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Let));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::MultiLineComment));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Let));
 }
 
 #[test]
@@ -407,8 +407,8 @@ fn test_unterminated_multi_line_comment() {
 #[test]
 fn test_slash_and_slash_assign() {
     let mut lexer = Lexer::new("/ /=");
-    assert_eq!(lexer.next_token(), Ok(TokenKind::Slash));
-    assert_eq!(lexer.next_token(), Ok(TokenKind::SlashAssign));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Slash));
+    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::SlashAssign));
 }
 
 #[test]
@@ -749,8 +749,8 @@ fn test_float_literals() {
 
     // "1." is tokenized as IntegerLiteral(1) followed by Dot(.)
     let mut trailing_dot = Lexer::new("1.");
-    assert_eq!(trailing_dot.next_token(), Ok(TokenKind::IntegerLiteral));
-    assert_eq!(trailing_dot.next_token(), Ok(TokenKind::Dot));
+    assert_eq!(trailing_dot.next_token().map(|t| t.kind), Ok(TokenKind::IntegerLiteral));
+    assert_eq!(trailing_dot.next_token().map(|t| t.kind), Ok(TokenKind::Dot));
 }
 
 #[test]
@@ -917,4 +917,25 @@ fn test_unicode_whitespace() {
             TokenKind::Semicolon,
         ]
     );
+}
+
+#[test]
+fn test_token_text_via_span() {
+    let mut lexer = Lexer::new("let myVariable = 1_000_000;");
+    // 1. 'let'
+    let tok1 = lexer.next_token().unwrap();
+    assert_eq!(tok1.kind, TokenKind::Let);
+    assert_eq!(lexer.slice(tok1.span), "let");
+    // 2. 'myVariable' (識別子名を取得)
+    let tok2 = lexer.next_token().unwrap();
+    assert_eq!(tok2.kind, TokenKind::Identifier);
+    assert_eq!(lexer.slice(tok2.span), "myVariable");
+    // 3. '='
+    let tok3 = lexer.next_token().unwrap();
+    assert_eq!(tok3.kind, TokenKind::Assign);
+    assert_eq!(lexer.slice(tok3.span), "=");
+    // 4. '1_000_000' (リテラルテキストを取得)
+    let tok4 = lexer.next_token().unwrap();
+    assert_eq!(tok4.kind, TokenKind::IntegerLiteral);
+    assert_eq!(lexer.slice(tok4.span), "1_000_000");
 }

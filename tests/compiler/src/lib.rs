@@ -14,11 +14,10 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenKind>, String> {
     let mut tokens = Vec::new();
     loop {
         let tok = lexer.next_token()?;
-        if tok == TokenKind::Eof {
+        if tok.kind == TokenKind::Eof {
             break;
         }
-        tokens.push(tok);
+        tokens.push(tok.kind);
     }
     Ok(tokens)
 }
-

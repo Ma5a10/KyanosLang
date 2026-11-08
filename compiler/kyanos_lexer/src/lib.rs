@@ -6,29 +6,66 @@
 
 //! Lexer and token definitions for the Kyanos programming language.
 /// reference design/kyanos_lex_grammar.g4
-use std::iter::Peekable;
-use std::str::Chars;
+use kyanos_ast::Span;
 
 pub mod token;
 pub use token::{Token, TokenKind};
 
 pub struct Lexer<'a> {
-    chars: Peekable<Chars<'a>>,
+    /// The entire source code strings.
+    input: &'a str,
+    /// current byte offset position.
+    cursor: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self {
-            chars: input.chars().peekable(),
+        Self { input, cursor: 0 }
+    }
+
+    /// Look ahead at the current character (without consuming it)
+    #[inline]
+    fn peek(&self) -> Option<char> {
+        self.input[self.cursor..].chars().next()
+    }
+
+    /// Look ahead to the second character (for identifying sequences like 'c"' or '&&=')
+    #[inline]
+    fn peek_second(&self) -> Option<char> {
+        let mut chars = self.input[self.cursor..].chars();
+        chars.next();
+        chars.next()
+    }
+
+    /// Consume one character, return that character, and advance the cursor.
+    #[inline]
+    fn bump(&mut self) -> Option<char> {
+        let ch = self.peek()?;
+        self.cursor += ch.len_utf8();
+        Some(ch)
+    }
+    /// Consume only if the condition matches.
+    #[inline]
+    fn match_char(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.cursor += expected.len_utf8();
+            true
+        } else {
+            false
         }
+    }
+    /// Get the string slice of the source code corresponding to the specified Span.
+    #[inline]
+    pub fn slice(&self, span: Span) -> &'a str {
+        &self.input[span.start..span.end]
     }
 
     // Whitespace:
     // [\t\u000B\u000C\u00A0\uFEFF\p{Zs}]+ -> channel(HIDDEN);
     pub fn skip_whitespace(&mut self) {
-        while let Some(&ch) = self.chars.peek() {
+        while let Some(ch) = self.peek() {
             if Lexer::is_whitespace(ch) {
-                self.chars.next();
+                self.bump();
             } else {
                 break;
             }
@@ -41,30 +78,22 @@ impl<'a> Lexer<'a> {
     pub fn is_whitespace(ch: char) -> bool {
         matches!(
             ch,
-            ' ' | '\t'
-                | '\u{000B}'
-                | '\u{000C}'
-                | '\u{00A0}'
-                | '\u{FEFF}'
-                | '\u{1680}'
-                | '\u{2000}'..='\u{200A}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
+            ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{FEFF}' | '\u{1680}' | '\u{2000}'
+                ..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
         )
     }
 
     // LineTerminator:
     // ('\r\n' | [\r\n\u2028\u2029]) -> channel(HIDDEN);
     pub fn skip_line_terminator(&mut self) {
-        while let Some(&ch) = self.chars.peek() {
+        while let Some(ch) = self.peek() {
             if ch == '\r' {
-                self.chars.next();
-                if self.chars.peek() == Some(&'\n') {
-                    self.chars.next();
+                self.bump();
+                if self.peek() == Some('\n') {
+                    self.bump();
                 }
             } else if Self::is_line_terminator(ch) {
-                self.chars.next();
+                self.bump();
             } else {
                 break;
             }
@@ -78,14 +107,12 @@ impl<'a> Lexer<'a> {
 
     // Identifier: IdentifierStart IdentifierPart* | '_' IdentifierPart+;
     pub fn scan_identifier_or_keyword(&mut self) -> Option<String> {
-        let first = self.chars.peek().copied()?;
+        let first = self.peek()?;
         if first == '_' {
             // Identifiers starting with '_' must contain at least two characters (e.g. `_foo`, `__`).
             // A single '_' is not an identifier, but tokenized as `Underscore`.
-            let mut clone = self.chars.clone();
-            clone.next(); // Consume '_'
-            match clone.peek() {
-                Some(&next) if Self::is_identifier_part(next) => {
+            match self.peek_second() {
+                Some(next) if Self::is_identifier_part(next) => {
                     // Valid identifier starting with '_'
                 }
                 _ => return None,
@@ -94,14 +121,14 @@ impl<'a> Lexer<'a> {
             return None;
         }
 
-        self.chars.next();
+        self.bump();
         let mut ident = String::new();
         ident.push(first);
 
-        while let Some(&ch) = self.chars.peek() {
+        while let Some(ch) = self.peek() {
             if Self::is_identifier_part(ch) {
                 ident.push(ch);
-                self.chars.next();
+                self.bump();
             } else {
                 break;
             }
@@ -123,11 +150,11 @@ impl<'a> Lexer<'a> {
     }
 
     // next_token returns the next token kind.
-    pub fn next_token(&mut self) -> Result<TokenKind, String> {
+    pub fn next_token(&mut self) -> Result<Token, String> {
         // Skip whitespace and line terminators.
         loop {
             self.skip_whitespace();
-            if let Some(&ch) = self.chars.peek() {
+            if let Some(ch) = self.peek() {
                 if Self::is_line_terminator(ch) {
                     self.skip_line_terminator();
                     continue;
@@ -136,21 +163,31 @@ impl<'a> Lexer<'a> {
             break;
         }
 
-        // Peek first character without consuming
-        let first = match self.chars.peek().copied() {
+        // Record the starting position of the token.
+        let start = self.cursor;
+
+        // chech EOF
+        let first = match self.peek() {
             Some(c) => c,
-            None => return Ok(TokenKind::Eof),
+            None => return Ok(Token::new(TokenKind::Eof, Span::new(start, start))),
         };
 
+        // scan token kind (internal self.cursor moves)
+        let kind = self.scan_token_kind(first)?;
+
+        // Record the end position of the token.
+        let end = self.cursor;
+
+        Ok(Token::new(kind, Span::new(start, end)))
+    }
+
+    /// scan token kind
+    fn scan_token_kind(&mut self, first: char) -> Result<TokenKind, String> {
         // Compile-time C-String Literal: c"..."
-        if first == 'c' {
-            let mut clone = self.chars.clone();
-            clone.next(); // consume 'c'
-            if clone.peek() == Some(&'"') {
-                self.chars.next(); // consume 'c'
-                self.chars.next(); // consume '"'
-                return self.scan_string_contents(TokenKind::CStringLiteral);
-            }
+        if first == 'c' && self.peek_second() == Some('"') {
+            self.bump(); // consume 'c'
+            self.bump(); // consume '"'
+            return self.scan_string_contents(TokenKind::CStringLiteral);
         }
 
         // Identifier: IdentifierStart IdentifierPart*;
@@ -158,8 +195,8 @@ impl<'a> Lexer<'a> {
             // Note: scan_identifier_or_keyword returns None if single '_'
             if let Some(ident) = self.scan_identifier_or_keyword() {
                 // yield*
-                if ident == "yield" && self.chars.peek() == Some(&'*') {
-                    self.chars.next();
+                if ident == "yield" && self.peek() == Some('*') {
+                    self.bump(); // consume '*'
                     return Ok(TokenKind::YieldStar);
                 }
 
@@ -175,7 +212,7 @@ impl<'a> Lexer<'a> {
         }
 
         // 3. Operators & Punctuators (single char tokens consume here)
-        let character = self.chars.next().unwrap();
+        let character = self.bump().unwrap();
         match character {
             // multi symbols
             '+' => self.plus_match(),
@@ -216,17 +253,6 @@ impl<'a> Lexer<'a> {
             '~' => Ok(TokenKind::Tilde),
             '_' => Ok(TokenKind::Underscore),
             c => Err(format!("Invalid token: {}", c)),
-        }
-    }
-
-    // Consumes the next character if it matches `expected`.
-    #[inline]
-    fn match_char(&mut self, expected: char) -> bool {
-        if self.chars.peek() == Some(&expected) {
-            self.chars.next();
-            true
-        } else {
-            false
         }
     }
 
@@ -282,20 +308,20 @@ impl<'a> Lexer<'a> {
 
     /// Scans a single-line comment: `// ...`
     fn scan_single_line_comment(&mut self) -> TokenKind {
-        while let Some(&ch) = self.chars.peek() {
+        while let Some(ch) = self.peek() {
             if Self::is_line_terminator(ch) {
                 break;
             }
-            self.chars.next();
+            self.bump();
         }
         TokenKind::SingleLineComment
     }
 
     /// Scans a multi-line comment: `/* ... */`
     fn scan_multi_line_comment(&mut self) -> Result<TokenKind, String> {
-        while let Some(ch) = self.chars.next() {
-            if ch == '*' && self.chars.peek() == Some(&'/') {
-                self.chars.next(); // Consume '/'
+        while let Some(ch) = self.bump() {
+            if ch == '*' && self.peek() == Some('/') {
+                self.bump(); // Consume '/'
                 return Ok(TokenKind::MultiLineComment);
             }
         }
@@ -437,7 +463,7 @@ impl<'a> Lexer<'a> {
     // StringLiteral, CharLiteral, CStringLiteral
     /// Scans an escape sequence right after consuming `\`.
     fn scan_escape_sequence(&mut self) -> Result<(), String> {
-        match self.chars.next() {
+        match self.bump() {
             Some('\'' | '"' | '`' | '$' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'v' | '0') => {
                 Ok(())
             }
@@ -446,12 +472,12 @@ impl<'a> Lexer<'a> {
                 if self.match_char('{') {
                     // \u{HexDigit+}
                     let mut count = 0;
-                    while let Some(&ch) = self.chars.peek() {
+                    while let Some(ch) = self.peek() {
                         if ch.is_ascii_hexdigit() {
-                            self.chars.next();
+                            self.bump();
                             count += 1;
                         } else if ch == '}' {
-                            self.chars.next();
+                            self.bump();
                             if count == 0 {
                                 return Err("Empty Unicode escape sequence".to_string());
                             }
@@ -464,7 +490,7 @@ impl<'a> Lexer<'a> {
                 } else {
                     // \uXXXX (4 hex digits)
                     for _ in 0..4 {
-                        match self.chars.next() {
+                        match self.bump() {
                             Some(ch) if ch.is_ascii_hexdigit() => {}
                             Some(ch) => {
                                 return Err(format!(
@@ -487,7 +513,7 @@ impl<'a> Lexer<'a> {
 
     /// Scans contents of a double-quoted string literal until closing `"` (used for both StringLiteral and CStringLiteral).
     fn scan_string_contents(&mut self, kind: TokenKind) -> Result<TokenKind, String> {
-        while let Some(ch) = self.chars.next() {
+        while let Some(ch) = self.bump() {
             if ch == '"' {
                 return Ok(kind);
             } else if ch == '\\' {
@@ -501,7 +527,7 @@ impl<'a> Lexer<'a> {
 
     /// Scans a character literal: `'...'`
     fn scan_char_literal(&mut self) -> Result<TokenKind, String> {
-        match self.chars.next() {
+        match self.bump() {
             Some('\'') => return Err("Empty character literal".to_string()),
             Some('\\') => {
                 self.scan_escape_sequence()?;
@@ -527,16 +553,14 @@ impl<'a> Lexer<'a> {
     where
         F: Fn(char) -> bool,
     {
-        while let Some(&ch) = self.chars.peek() {
+        while let Some(ch) = self.peek() {
             if is_digit(ch) {
-                self.chars.next();
+                self.bump();
             } else if ch == '_' {
-                let mut clone = self.chars.clone();
-                clone.next(); // consume '_'
-                match clone.peek() {
-                    Some(&next) if is_digit(next) => {
-                        self.chars.next(); // consume '_'
-                        self.chars.next(); // consume next digit
+                match self.peek_second() {
+                    Some(next) if is_digit(next) => {
+                        self.bump(); // consume '_'
+                        self.bump(); // consume next digit
                     }
                     _ => {
                         return Err(
@@ -553,14 +577,14 @@ impl<'a> Lexer<'a> {
 
     /// Scans the exponent part of a float literal (`[eE][+-]?[0-9]+`).
     fn scan_exponent(&mut self) -> Result<(), String> {
-        self.chars.next(); // consume 'e' or 'E'
-        if let Some(&ch) = self.chars.peek() {
+        self.bump(); // consume 'e' or 'E'
+        if let Some(ch) = self.peek() {
             if ch == '+' || ch == '-' {
-                self.chars.next();
+                self.bump();
             }
         }
-        match self.chars.peek() {
-            Some(&ch) if ch.is_ascii_digit() => self.scan_digits(|c| c.is_ascii_digit()),
+        match self.peek() {
+            Some(ch) if ch.is_ascii_digit() => self.scan_digits(|c| c.is_ascii_digit()),
             _ => Err("Exponent part must have at least one digit".to_string()),
         }
     }
@@ -570,9 +594,9 @@ impl<'a> Lexer<'a> {
     where
         F: Fn(char) -> bool,
     {
-        self.chars.next(); // consume prefix character ('x', 'b', or 'o')
-        match self.chars.peek() {
-            Some(&ch) if is_digit(ch) => {
+        self.bump(); // consume prefix character ('x', 'b', or 'o')
+        match self.peek() {
+            Some(ch) if is_digit(ch) => {
                 self.scan_digits(is_digit)?;
             }
             _ => {
@@ -595,7 +619,7 @@ impl<'a> Lexer<'a> {
 
     /// Verifies that no identifier characters or digits immediately follow a numeric literal (e.g. `123foo`).
     fn check_no_ident_suffix(&mut self) -> Result<(), String> {
-        if let Some(&ch) = self.chars.peek() {
+        if let Some(ch) = self.peek() {
             if Self::is_identifier_start(ch) || ch.is_ascii_digit() {
                 return Err(format!(
                     "Invalid character '{}' following numeric literal",
@@ -608,10 +632,10 @@ impl<'a> Lexer<'a> {
 
     /// Scans a numeric literal: `IntegerLiteral`, `FloatLiteral`, or `BigIntLiteral`.
     fn scan_number_literal(&mut self) -> Result<TokenKind, String> {
-        let first = self.chars.next().unwrap();
+        let first = self.bump().unwrap();
 
         if first == '0' {
-            if let Some(&ch) = self.chars.peek() {
+            if let Some(ch) = self.peek() {
                 match ch {
                     'x' | 'X' => return self.scan_radix_integer(ch, |c| c.is_ascii_hexdigit()),
                     'b' | 'B' => return self.scan_radix_integer(ch, |c| c == '0' || c == '1'),
@@ -623,13 +647,11 @@ impl<'a> Lexer<'a> {
                         );
                     }
                     '.' => {
-                        let mut clone = self.chars.clone();
-                        clone.next(); // consume '.'
-                        if let Some(&next) = clone.peek() {
-                            if next.is_ascii_digit() {
-                                self.chars.next(); // consume '.'
+                        match self.peek_second() {
+                            Some(next) if next.is_ascii_digit() => {
+                                self.bump(); // consume '.'
                                 self.scan_digits(|c| c.is_ascii_digit())?;
-                                if let Some(&exp) = self.chars.peek() {
+                                if let Some(exp) = self.peek() {
                                     if exp == 'e' || exp == 'E' {
                                         self.scan_exponent()?;
                                     }
@@ -637,6 +659,7 @@ impl<'a> Lexer<'a> {
                                 self.check_no_ident_suffix()?;
                                 return Ok(TokenKind::FloatLiteral);
                             }
+                            _ => {}
                         }
                     }
                     'e' | 'E' => {
@@ -645,7 +668,7 @@ impl<'a> Lexer<'a> {
                         return Ok(TokenKind::FloatLiteral);
                     }
                     'n' | 'N' => {
-                        self.chars.next(); // consume 'n' or 'N'
+                        self.bump(); // consume 'n' or 'N'
                         self.check_no_ident_suffix()?;
                         return Ok(TokenKind::BigIntLiteral);
                     }
@@ -660,15 +683,13 @@ impl<'a> Lexer<'a> {
         self.scan_digits(|c| c.is_ascii_digit())?;
 
         // Check for float (fraction or exponent)
-        if let Some(&ch) = self.chars.peek() {
+        if let Some(ch) = self.peek() {
             if ch == '.' {
-                let mut clone = self.chars.clone();
-                clone.next(); // consume '.'
-                if let Some(&next) = clone.peek() {
-                    if next.is_ascii_digit() {
-                        self.chars.next(); // consume '.'
+                match self.peek_second() {
+                    Some(next) if next.is_ascii_digit() => {
+                        self.bump(); // consume '.'
                         self.scan_digits(|c| c.is_ascii_digit())?;
-                        if let Some(&exp) = self.chars.peek() {
+                        if let Some(exp) = self.peek() {
                             if exp == 'e' || exp == 'E' {
                                 self.scan_exponent()?;
                             }
@@ -676,6 +697,7 @@ impl<'a> Lexer<'a> {
                         self.check_no_ident_suffix()?;
                         return Ok(TokenKind::FloatLiteral);
                     }
+                    _ => {}
                 }
             } else if ch == 'e' || ch == 'E' {
                 self.scan_exponent()?;
@@ -696,7 +718,7 @@ impl<'a> Lexer<'a> {
 
     /// Scans a template string literal: `` `...${expr}...` ``
     fn scan_template_string_literal(&mut self) -> Result<TokenKind, String> {
-        while let Some(ch) = self.chars.next() {
+        while let Some(ch) = self.bump() {
             if ch == '`' {
                 return Ok(TokenKind::TemplateStringLiteral);
             } else if ch == '\\' {
@@ -704,7 +726,7 @@ impl<'a> Lexer<'a> {
             } else if ch == '$' && self.match_char('{') {
                 // Template interpolation: ${...}
                 let mut brace_depth = 1;
-                while let Some(next_ch) = self.chars.next() {
+                while let Some(next_ch) = self.bump() {
                     match next_ch {
                         '{' => brace_depth += 1,
                         '}' => {
@@ -749,12 +771,12 @@ impl<'a> Lexer<'a> {
             return Ok(TokenKind::HashBracket);
         }
 
-        match self.chars.peek().copied() {
+        match self.peek() {
             Some(first) if Self::is_identifier_start(first) || first == '_' => {
-                self.chars.next(); // Consume first character
-                while let Some(&ch) = self.chars.peek() {
+                self.bump(); // Consume first character
+                while let Some(ch) = self.peek() {
                     if Self::is_identifier_part(ch) {
-                        self.chars.next();
+                        self.bump();
                     } else {
                         break;
                     }
