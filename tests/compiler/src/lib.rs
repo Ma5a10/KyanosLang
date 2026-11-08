@@ -14,7 +14,7 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenKind>, String> {
     let mut tokens = Vec::new();
     loop {
         let tok = lexer.next_token()?;
-        if tok == TokenKind::LineTerminator {
+        if tok == TokenKind::Eof {
             break;
         }
         tokens.push(tok);

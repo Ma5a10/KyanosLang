@@ -22,17 +22,13 @@ impl Token {
 /// Token kinds corresponding to `kyanos_lex_grammar.g4`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenKind {
-    // =========================================================================
     // Whitespace & Comments (Trivia)
-    // =========================================================================
     Whitespace,
     LineTerminator,
     SingleLineComment,
     MultiLineComment,
 
-    // =========================================================================
     // Keywords
-    // =========================================================================
     Let,
     Const,
     Function,
@@ -93,51 +89,45 @@ pub enum TokenKind {
     False,
     Null,
 
-    // =========================================================================
     // Primitive Type Keywords
-    // =========================================================================
-    TypeByte,       // 'byte' | 'i8'
-    TypeShort,      // 'short' | 'i16'
-    TypeInt,        // 'int' | 'i32'
-    TypeLong,       // 'long' | 'i64'
-    TypeSizeT,      // 'size_t' | 'isize'
-    TypeUbyte,      // 'ubyte' | 'u8'
-    TypeUshort,     // 'ushort' | 'u16'
-    TypeUint,       // 'uint' | 'u32'
-    TypeUlong,      // 'ulong' | 'u64'
-    TypeFloat,      // 'float' | 'f32'
-    TypeDouble,     // 'double' | 'f64'
-    TypeBool,       // 'bool'
-    TypeChar,       // 'char'
-    TypeString,     // 'string'
-    TypeVoid,       // 'void'
-    TypeNever,      // 'never'
-    TypeRawptr,     // 'rawptr'
+    TypeByte,   // 'byte' | 'i8'
+    TypeShort,  // 'short' | 'i16'
+    TypeInt,    // 'int' | 'i32'
+    TypeLong,   // 'long' | 'i64'
+    TypeSizeT,  // 'size_t' | 'isize'
+    TypeUbyte,  // 'ubyte' | 'u8'
+    TypeUshort, // 'ushort' | 'u16'
+    TypeUint,   // 'uint' | 'u32'
+    TypeUlong,  // 'ulong' | 'u64'
+    TypeFloat,  // 'float' | 'f32'
+    TypeDouble, // 'double' | 'f64'
+    TypeBool,   // 'bool'
+    TypeChar,   // 'char'
+    TypeString, // 'string'
+    TypeVoid,   // 'void'
+    TypeNever,  // 'never'
+    TypeRawptr, // 'rawptr'
 
-    // =========================================================================
     // Punctuators & Delimiters
-    // =========================================================================
-    OpenBrace,          // '{'
-    CloseBrace,         // '}'
-    OpenParen,          // '('
-    CloseParen,         // ')'
-    OpenBracket,        // '['
-    CloseBracket,       // ']'
-    Dot,                // '.'
-    Ellipsis,           // '...'
-    Semicolon,          // ';'
-    Comma,              // ','
-    Colon,              // ':'
-    Question,           // '?'
-    OptionalChain,      // '?.'
-    NullCoalescing,     // '??'
-    Arrow,              // '=>'
-    HashBracket,        // '#['
-    Underscore,         // '_'
+    OpenBrace,      // '{'
+    CloseBrace,     // '}'
+    OpenParen,      // '('
+    CloseParen,     // ')'
+    OpenBracket,    // '['
+    CloseBracket,   // ']'
+    Dot,            // '.'
+    Ellipsis,       // '...'
+    Semicolon,      // ';'
+    Comma,          // ','
+    Colon,          // ':'
+    Question,       // '?'
+    OptionalChain,  // '?.'
+    NullCoalescing, // '??'
+    Arrow,          // '=>'
+    HashBracket,    // '#['
+    Underscore,     // '_'
 
-    // =========================================================================
     // Arithmetic & Bitwise Operators
-    // =========================================================================
     Plus,               // '+'
     Minus,              // '-'
     Star,               // '*'
@@ -146,7 +136,7 @@ pub enum TokenKind {
     Power,              // '**'
     PlusPlus,           // '++'
     MinusMinus,         // '--'
-    Amp,                // '&'
+    And,                // '&'
     Bar,                // '|'
     Caret,              // '^'
     Tilde,              // '~'
@@ -154,49 +144,41 @@ pub enum TokenKind {
     ShiftRight,         // '>>'
     UnsignedShiftRight, // '>>>'
 
-    // =========================================================================
     // Logical & Relational Operators
-    // =========================================================================
-    Bang,               // '!'
-    AmpAmp,             // '&&'
-    BarBar,             // '||'
-    Equals,             // '=='
-    NotEquals,          // '!='
-    LessThan,           // '<'
-    LessThanEquals,     // '<='
-    GreaterThan,        // '>'
-    GreaterThanEquals,  // '>='
+    Bang,              // '!'
+    AndAnd,            // '&&'
+    BarBar,            // '||'
+    Equals,            // '=='
+    NotEquals,         // '!='
+    LessThan,          // '<'
+    LessThanEquals,    // '<='
+    GreaterThan,       // '>'
+    GreaterThanEquals, // '>='
 
-    // =========================================================================
     // Assignment Operators
-    // =========================================================================
-    Assign,                 // '='
-    PlusAssign,             // '+='
-    MinusAssign,            // '-='
-    StarAssign,             // '*='
-    SlashAssign,            // '/='
-    PercentAssign,          // '%='
-    PowerAssign,            // '**='
-    ShiftLeftAssign,        // '<<='
-    ShiftRightAssign,       // '>>='
-    UnsignedShiftRightAssign,// '>>>='
-    AndAssign,              // '&='
-    OrAssign,               // '|='
-    XorAssign,              // '^='
-    AmpAmpAssign,           // '&&='
-    BarBarAssign,           // '||='
-    NullCoalescingAssign,   // '??='
+    Assign,                   // '='
+    PlusAssign,               // '+='
+    MinusAssign,              // '-='
+    StarAssign,               // '*='
+    SlashAssign,              // '/='
+    PercentAssign,            // '%='
+    PowerAssign,              // '**='
+    ShiftLeftAssign,          // '<<='
+    ShiftRightAssign,         // '>>='
+    UnsignedShiftRightAssign, // '>>>='
+    AndAssign,                // '&='
+    BarAssign,                // '|='
+    CaretAssign,              // '^='
+    AndAndAssign,             // '&&='
+    BarBarAssign,             // '||='
+    NullCoalescingAssign,     // '??='
 
-    // =========================================================================
     // Type Operators
-    // =========================================================================
-    Is,     // 'is'
-    Typeof, // 'typeof'
-    Sizeof, // 'sizeof'
+    Is,
+    Typeof,
+    Sizeof,
 
-    // =========================================================================
     // Literals
-    // =========================================================================
     IntegerLiteral,
     FloatLiteral,
     BigIntLiteral,
@@ -205,15 +187,11 @@ pub enum TokenKind {
     CharLiteral,
     TemplateStringLiteral,
 
-    // =========================================================================
     // Identifiers
-    // =========================================================================
     Identifier,
     PrivateIdentifier, // '#identifier'
 
-    // =========================================================================
     // Special Tokens
-    // =========================================================================
     Eof,
     Error,
 }
@@ -347,11 +325,98 @@ impl TokenKind {
                 | Self::ShiftRightAssign
                 | Self::UnsignedShiftRightAssign
                 | Self::AndAssign
-                | Self::OrAssign
-                | Self::XorAssign
-                | Self::AmpAmpAssign
+                | Self::BarAssign
+                | Self::CaretAssign
+                | Self::AndAndAssign
                 | Self::BarBarAssign
                 | Self::NullCoalescingAssign
         )
+    }
+
+    /// keyword convert from string
+    pub fn from_keyword(ident: &str) -> Option<TokenKind> {
+        match ident {
+            // Declarations & Definitions
+            "let" => Some(TokenKind::Let),
+            "const" => Some(TokenKind::Const),
+            "function" => Some(TokenKind::Function),
+            "class" => Some(TokenKind::Class),
+            "struct" => Some(TokenKind::Struct),
+            "interface" => Some(TokenKind::Interface),
+            "enum" => Some(TokenKind::Enum),
+            "constructor" => Some(TokenKind::Constructor),
+            // Control flow
+            "if" => Some(TokenKind::If),
+            "else" => Some(TokenKind::Else),
+            "do" => Some(TokenKind::Do),
+            "while" => Some(TokenKind::While),
+            "for" => Some(TokenKind::For),
+            "in" => Some(TokenKind::In),
+            "of" => Some(TokenKind::Of),
+            "return" => Some(TokenKind::Return),
+            "break" => Some(TokenKind::Break),
+            "continue" => Some(TokenKind::Continue),
+            "switch" => Some(TokenKind::Switch),
+            "case" => Some(TokenKind::Case),
+            "default" => Some(TokenKind::Default),
+            "when" => Some(TokenKind::When),
+            "debugger" => Some(TokenKind::Debugger),
+            // Resource & Error handling
+            "try" => Some(TokenKind::Try),
+            "defer" => Some(TokenKind::Defer),
+            "using" => Some(TokenKind::Using),
+            // Modifiers
+            "public" => Some(TokenKind::Public),
+            "protected" => Some(TokenKind::Protected),
+            "private" => Some(TokenKind::Private),
+            "static" => Some(TokenKind::Static),
+            "readonly" => Some(TokenKind::Readonly),
+            // OOP & Types
+            "new" => Some(TokenKind::New),
+            "this" => Some(TokenKind::This),
+            "super" => Some(TokenKind::Super),
+            "extends" => Some(TokenKind::Extends),
+            "implements" => Some(TokenKind::Implements),
+            "as" => Some(TokenKind::As),
+            // Modules
+            "import" => Some(TokenKind::Import),
+            "export" => Some(TokenKind::Export),
+            "from" => Some(TokenKind::From),
+            // Async & Concurrency
+            "async" => Some(TokenKind::Async),
+            "await" => Some(TokenKind::Await),
+            "yield" => Some(TokenKind::Yield),
+            "spawn" => Some(TokenKind::Spawn),
+            // Low-level & Memory
+            "unsafe" => Some(TokenKind::Unsafe),
+            "extern" => Some(TokenKind::Extern),
+            "delete" => Some(TokenKind::Delete),
+            // Literals
+            "true" => Some(TokenKind::True),
+            "false" => Some(TokenKind::False),
+            "null" => Some(TokenKind::Null),
+            // Primitive Types (Aliases included)
+            "byte" | "i8" => Some(TokenKind::TypeByte),
+            "short" | "i16" => Some(TokenKind::TypeShort),
+            "int" | "i32" => Some(TokenKind::TypeInt),
+            "long" | "i64" => Some(TokenKind::TypeLong),
+            "size_t" | "isize" => Some(TokenKind::TypeSizeT),
+            "ubyte" | "u8" => Some(TokenKind::TypeUbyte),
+            "ushort" | "u16" => Some(TokenKind::TypeUshort),
+            "uint" | "u32" => Some(TokenKind::TypeUint),
+            "ulong" | "u64" => Some(TokenKind::TypeUlong),
+            "float" | "f32" => Some(TokenKind::TypeFloat),
+            "double" | "f64" => Some(TokenKind::TypeDouble),
+            "bool" => Some(TokenKind::TypeBool),
+            "char" => Some(TokenKind::TypeChar),
+            "string" => Some(TokenKind::TypeString),
+            "void" => Some(TokenKind::TypeVoid),
+            "never" => Some(TokenKind::TypeNever),
+            "rawptr" => Some(TokenKind::TypeRawptr),
+            "is" => Some(TokenKind::Is),
+            "typeof" => Some(TokenKind::Typeof),
+            "sizeof" => Some(TokenKind::Sizeof),
+            _ => None,
+        }
     }
 }

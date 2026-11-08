@@ -427,7 +427,7 @@ pointerType:
 
 // Reference Types: '&T' (mutable reference), '&const T' (immutable reference)
 referenceType:
-	Amp Const? type_;
+	And Const? type_;
 
 // Tuple Type: [T, U, V] (stack value type)
 tupleType:
@@ -671,7 +671,7 @@ singleExpression:
 	// Logical NOT: !x
 	| Bang singleExpression			# NotExpression
 	// Address-Of / Reference: &val (yields &T if 'let', &const T if 'const')
-	| Amp singleExpression			# AddressOfExpression
+	| And singleExpression			# AddressOfExpression
 	// Raw Pointer Dereference: *ptr (requires unsafe block or unsafe expression)
 	| Star singleExpression			# DereferenceExpression
 	// Early Return Error Propagation: try expr (unwraps Ok(v) or early-returns Err(e))
@@ -721,12 +721,12 @@ singleExpression:
 	| singleExpression (Equals | NotEquals) singleExpression	# EqualityExpression
 
 	// --- Bitwise Logical ---
-	| singleExpression Amp singleExpression		# BitAndExpression
+	| singleExpression And singleExpression		# BitAndExpression
 	| singleExpression Caret singleExpression	# BitXorExpression
 	| singleExpression Bar singleExpression		# BitOrExpression
 
 	// --- Short-Circuit Logical & Null-Coalescing ---
-	| singleExpression AmpAmp singleExpression			# LogicalAndExpression
+	| singleExpression AndAnd singleExpression			# LogicalAndExpression
 	| singleExpression BarBar singleExpression			# LogicalOrExpression
 	// Null-Coalescing Operator: a ?? b (if 'a' is None/null, falls back to 'b')
 	| singleExpression NullCoalescing singleExpression	# NullCoalescingExpression
@@ -812,9 +812,9 @@ assignmentOperator:
 	| ShiftRightAssign
 	| UnsignedShiftRightAssign
 	| AndAssign
-	| XorAssign
-	| OrAssign
-	| AmpAmpAssign
+	| CaretAssign
+	| BarAssign
+	| AndAndAssign
 	| BarBarAssign
 	| NullCoalescingAssign;
 

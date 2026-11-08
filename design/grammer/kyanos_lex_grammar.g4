@@ -125,7 +125,7 @@ Percent: '%';
 Power: '**';
 PlusPlus: '++';
 MinusMinus: '--';
-Amp: '&';
+And: '&';
 Bar: '|';
 Caret: '^';
 Tilde: '~';
@@ -135,7 +135,7 @@ UnsignedShiftRight: '>>>';
 
 // Logical & Relational
 Bang: '!';
-AmpAmp: '&&';
+AndAnd: '&&';
 BarBar: '||';
 Equals: '==';
 NotEquals: '!=';
@@ -156,9 +156,9 @@ ShiftLeftAssign: '<<=';
 ShiftRightAssign: '>>=';
 UnsignedShiftRightAssign: '>>>=';
 AndAssign: '&=';
-OrAssign: '|=';
-XorAssign: '^=';
-AmpAmpAssign: '&&=';
+BarAssign: '|=';
+CaretAssign: '^=';
+AndAndAssign: '&&=';
 BarBarAssign: '||=';
 NullCoalescingAssign: '??=';
 
