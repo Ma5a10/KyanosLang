@@ -11,11 +11,17 @@ use kyanos_ast::Span;
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
+    /// Whether there was one or more line breaks (LineTerminators) immediately before this.
+    pub has_leading_newline: bool,
 }
 
 impl Token {
-    pub const fn new(kind: TokenKind, span: Span) -> Self {
-        Self { kind, span }
+    pub const fn new(kind: TokenKind, span: Span, has_leading_newline: bool) -> Self {
+        Self {
+            kind,
+            span,
+            has_leading_newline,
+        }
     }
 }
 

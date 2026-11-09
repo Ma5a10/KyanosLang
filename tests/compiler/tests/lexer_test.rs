@@ -11,17 +11,32 @@ use kyanos_lexer::{Lexer, TokenKind};
 fn test_operators_continuous() {
     let mut lexer = Lexer::new("{}()[].;,:?_+-*/%&|~!< > =");
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenBrace));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseBrace));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::CloseBrace)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenParen));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseParen));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::OpenBracket));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::CloseBracket));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::CloseParen)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::OpenBracket)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::CloseBracket)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Dot));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Semicolon));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Comma));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Colon));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Question));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Underscore));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Underscore)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Plus));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Minus));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Star));
@@ -32,7 +47,10 @@ fn test_operators_continuous() {
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Tilde));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Bang));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::LessThan));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::GreaterThan));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::GreaterThan)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Assign));
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Eof));
 }
@@ -87,15 +105,24 @@ fn test_scan_identifier() {
     // Single '_' should not be scanned as an identifier
     let mut wildcard_lexer = Lexer::new("_");
     assert_eq!(wildcard_lexer.scan_identifier_or_keyword(), None);
-    assert_eq!(wildcard_lexer.next_token().map(|t| t.kind), Ok(TokenKind::Underscore));
+    assert_eq!(
+        wildcard_lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Underscore)
+    );
 }
 
 #[test]
 fn test_next_token_identifier() {
     let mut lexer = Lexer::new("myVar + other");
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Plus));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
 }
 
 #[test]
@@ -354,12 +381,30 @@ fn test_line_terminators() {
     assert!(!Lexer::is_line_terminator('a'));
 
     let mut lexer = Lexer::new("a\r\nb\nc\rd\u{2028}e\u{2029}f");
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Identifier));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::Identifier)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Eof));
 
     let tokens = tokenize("let x: int = y;\n\r\n  let z: int = w;").unwrap();
@@ -387,14 +432,20 @@ fn test_line_terminators() {
 #[test]
 fn test_single_line_comment() {
     let mut lexer = Lexer::new("// this is a comment\nlet");
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::SingleLineComment));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::SingleLineComment)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Let));
 }
 
 #[test]
 fn test_multi_line_comment() {
     let mut lexer = Lexer::new("/* comment\nline2 */ let");
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::MultiLineComment));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::MultiLineComment)
+    );
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Let));
 }
 
@@ -408,7 +459,10 @@ fn test_unterminated_multi_line_comment() {
 fn test_slash_and_slash_assign() {
     let mut lexer = Lexer::new("/ /=");
     assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::Slash));
-    assert_eq!(lexer.next_token().map(|t| t.kind), Ok(TokenKind::SlashAssign));
+    assert_eq!(
+        lexer.next_token().map(|t| t.kind),
+        Ok(TokenKind::SlashAssign)
+    );
 }
 
 #[test]
@@ -677,7 +731,9 @@ fn test_char_literal() {
 
 #[test]
 fn test_integer_literals() {
-    let tokens = tokenize("0 42 1_000_000 0x0 0xFF 0x1a_2b 0XDEAD 0b0 0b1010 0b11_00 0o0 0o755 0o12_34").unwrap();
+    let tokens =
+        tokenize("0 42 1_000_000 0x0 0xFF 0x1a_2b 0XDEAD 0b0 0b1010 0b11_00 0o0 0o755 0o12_34")
+            .unwrap();
     assert_eq!(
         tokens,
         vec![
@@ -749,8 +805,14 @@ fn test_float_literals() {
 
     // "1." is tokenized as IntegerLiteral(1) followed by Dot(.)
     let mut trailing_dot = Lexer::new("1.");
-    assert_eq!(trailing_dot.next_token().map(|t| t.kind), Ok(TokenKind::IntegerLiteral));
-    assert_eq!(trailing_dot.next_token().map(|t| t.kind), Ok(TokenKind::Dot));
+    assert_eq!(
+        trailing_dot.next_token().map(|t| t.kind),
+        Ok(TokenKind::IntegerLiteral)
+    );
+    assert_eq!(
+        trailing_dot.next_token().map(|t| t.kind),
+        Ok(TokenKind::Dot)
+    );
 }
 
 #[test]
@@ -802,17 +864,11 @@ fn test_template_string_literals() {
 
     // Template with interpolation
     let interpolated = tokenize(r#"`count: ${count}, user: ${user.name}`"#).unwrap();
-    assert_eq!(
-        interpolated,
-        vec![TokenKind::TemplateStringLiteral]
-    );
+    assert_eq!(interpolated, vec![TokenKind::TemplateStringLiteral]);
 
     // Template with nested braces and strings inside expression
     let nested = tokenize(r#"`result: ${format("{item}", { id: 1 })}`"#).unwrap();
-    assert_eq!(
-        nested,
-        vec![TokenKind::TemplateStringLiteral]
-    );
+    assert_eq!(nested, vec![TokenKind::TemplateStringLiteral]);
 
     // Negative tests
     let mut unclosed = Lexer::new("`unclosed template");
@@ -938,4 +994,128 @@ fn test_token_text_via_span() {
     let tok4 = lexer.next_token().unwrap();
     assert_eq!(tok4.kind, TokenKind::IntegerLiteral);
     assert_eq!(lexer.slice(tok4.span), "1_000_000");
+}
+
+#[test]
+fn test_leading_newline_detection() {
+    let mut lexer = Lexer::new("let x = 10\nlet y = 20");
+
+    // Line 1: let x = 10
+    let tok1 = lexer.next_token().unwrap();
+    assert_eq!(tok1.kind, TokenKind::Let);
+    assert!(!tok1.has_leading_newline);
+
+    let tok2 = lexer.next_token().unwrap();
+    assert_eq!(tok2.kind, TokenKind::Identifier);
+    assert!(!tok2.has_leading_newline);
+
+    let tok3 = lexer.next_token().unwrap();
+    assert_eq!(tok3.kind, TokenKind::Assign);
+    assert!(!tok3.has_leading_newline);
+
+    let tok4 = lexer.next_token().unwrap();
+    assert_eq!(tok4.kind, TokenKind::IntegerLiteral);
+    assert!(!tok4.has_leading_newline);
+
+    // Line 2: let y = 20 (tok5 follows '\n')
+    let tok5 = lexer.next_token().unwrap();
+    assert_eq!(tok5.kind, TokenKind::Let);
+    assert!(tok5.has_leading_newline);
+
+    let tok6 = lexer.next_token().unwrap();
+    assert_eq!(tok6.kind, TokenKind::Identifier);
+    assert!(!tok6.has_leading_newline);
+
+    let tok7 = lexer.next_token().unwrap();
+    assert_eq!(tok7.kind, TokenKind::Assign);
+    assert!(!tok7.has_leading_newline);
+
+    let tok8 = lexer.next_token().unwrap();
+    assert_eq!(tok8.kind, TokenKind::IntegerLiteral);
+    assert!(!tok8.has_leading_newline);
+
+    let eof = lexer.next_token().unwrap();
+    assert_eq!(eof.kind, TokenKind::Eof);
+    assert!(!eof.has_leading_newline);
+}
+
+#[test]
+fn test_leading_newline_various_line_terminators() {
+    // Tests CRLF, LF, CR, LS, PS
+    let mut lexer = Lexer::new("a\r\nb\nc\rd\u{2028}e\u{2029}f");
+
+    let tok_a = lexer.next_token().unwrap();
+    assert_eq!(tok_a.kind, TokenKind::Identifier);
+    assert!(!tok_a.has_leading_newline);
+
+    let tok_b = lexer.next_token().unwrap();
+    assert_eq!(tok_b.kind, TokenKind::Identifier);
+    assert!(tok_b.has_leading_newline); // after \r\n
+
+    let tok_c = lexer.next_token().unwrap();
+    assert_eq!(tok_c.kind, TokenKind::Identifier);
+    assert!(tok_c.has_leading_newline); // after \n
+
+    let tok_d = lexer.next_token().unwrap();
+    assert_eq!(tok_d.kind, TokenKind::Identifier);
+    assert!(tok_d.has_leading_newline); // after \r
+
+    let tok_e = lexer.next_token().unwrap();
+    assert_eq!(tok_e.kind, TokenKind::Identifier);
+    assert!(tok_e.has_leading_newline); // after \u{2028}
+
+    let tok_f = lexer.next_token().unwrap();
+    assert_eq!(tok_f.kind, TokenKind::Identifier);
+    assert!(tok_f.has_leading_newline); // after \u{2029}
+}
+
+#[test]
+fn test_leading_newline_expression_continuation() {
+    let source = "let total = a +\n    b +\n    c";
+    let mut lexer = Lexer::new(source);
+
+    let tok_let = lexer.next_token().unwrap();
+    assert_eq!(tok_let.kind, TokenKind::Let);
+    assert!(!tok_let.has_leading_newline);
+
+    let tok_total = lexer.next_token().unwrap();
+    assert_eq!(tok_total.kind, TokenKind::Identifier);
+    assert!(!tok_total.has_leading_newline);
+
+    let tok_assign = lexer.next_token().unwrap();
+    assert_eq!(tok_assign.kind, TokenKind::Assign);
+    assert!(!tok_assign.has_leading_newline);
+
+    let tok_a = lexer.next_token().unwrap();
+    assert_eq!(tok_a.kind, TokenKind::Identifier);
+    assert!(!tok_a.has_leading_newline);
+
+    let tok_plus1 = lexer.next_token().unwrap();
+    assert_eq!(tok_plus1.kind, TokenKind::Plus);
+    assert!(!tok_plus1.has_leading_newline);
+
+    // 'b' is on the second line after '+'
+    let tok_b = lexer.next_token().unwrap();
+    assert_eq!(tok_b.kind, TokenKind::Identifier);
+    assert!(tok_b.has_leading_newline);
+    assert_eq!(lexer.slice(tok_b.span), "b");
+
+    let tok_plus2 = lexer.next_token().unwrap();
+    assert_eq!(tok_plus2.kind, TokenKind::Plus);
+    assert!(!tok_plus2.has_leading_newline);
+
+    // 'c' is on the third line after '+'
+    let tok_c = lexer.next_token().unwrap();
+    assert_eq!(tok_c.kind, TokenKind::Identifier);
+    assert!(tok_c.has_leading_newline);
+    assert_eq!(lexer.slice(tok_c.span), "c");
+}
+
+#[test]
+fn test_leading_newline_first_token() {
+    // When file starts with leading newlines
+    let mut lexer = Lexer::new("\n\r\n  let x = 1;");
+    let tok = lexer.next_token().unwrap();
+    assert_eq!(tok.kind, TokenKind::Let);
+    assert!(tok.has_leading_newline);
 }

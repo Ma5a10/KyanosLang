@@ -76,11 +76,20 @@ impl<'a> Lexer<'a> {
     /// `\t`, `\u000B`, `\u000C`, `\uFEFF`, and all Unicode space separators (`\p{Zs}`).
     #[inline]
     pub fn is_whitespace(ch: char) -> bool {
-        matches!(
-            ch,
-            ' ' | '\t' | '\u{000B}' | '\u{000C}' | '\u{00A0}' | '\u{FEFF}' | '\u{1680}' | '\u{2000}'
-                ..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
-        )
+        match ch {
+            ' '
+            | '\t'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{00A0}'
+            | '\u{FEFF}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}' => true,
+            _ => false,
+        }
     }
 
     // LineTerminator:
@@ -149,19 +158,28 @@ impl<'a> Lexer<'a> {
         unicode_ident::is_xid_continue(c) || c == '$'
     }
 
-    // next_token returns the next token kind.
-    pub fn next_token(&mut self) -> Result<Token, String> {
-        // Skip whitespace and line terminators.
+    /// Skip whitespace and line terminators.
+    /// Returns true if any line terminators were skipped.
+    fn skip_whitespace_and_newlines(&mut self) -> bool {
+        let mut had_newline = false;
         loop {
             self.skip_whitespace();
             if let Some(ch) = self.peek() {
                 if Self::is_line_terminator(ch) {
+                    had_newline = true;
                     self.skip_line_terminator();
                     continue;
                 }
             }
             break;
         }
+        had_newline
+    }
+
+    // next_token returns the next token kind.
+    pub fn next_token(&mut self) -> Result<Token, String> {
+        // Skip whitespace and line terminators. and get if there were newlines.
+        let had_newline = self.skip_whitespace_and_newlines();
 
         // Record the starting position of the token.
         let start = self.cursor;
@@ -169,7 +187,13 @@ impl<'a> Lexer<'a> {
         // chech EOF
         let first = match self.peek() {
             Some(c) => c,
-            None => return Ok(Token::new(TokenKind::Eof, Span::new(start, start))),
+            None => {
+                return Ok(Token::new(
+                    TokenKind::Eof,
+                    Span::new(start, start),
+                    had_newline,
+                ))
+            }
         };
 
         // scan token kind (internal self.cursor moves)
@@ -178,7 +202,7 @@ impl<'a> Lexer<'a> {
         // Record the end position of the token.
         let end = self.cursor;
 
-        Ok(Token::new(kind, Span::new(start, end)))
+        Ok(Token::new(kind, Span::new(start, end), had_newline))
     }
 
     /// scan token kind
@@ -307,6 +331,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scans a single-line comment: `// ...`
+    /// Comments are keeped as tokens during the lexical analysis phase so that they can be utilized by tools such as an LSP;
+    /// plan to implement a separate mechanism in the compiler's parser to skip those comments.
     fn scan_single_line_comment(&mut self) -> TokenKind {
         while let Some(ch) = self.peek() {
             if Self::is_line_terminator(ch) {
@@ -318,6 +344,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scans a multi-line comment: `/* ... */`
+    /// Keep as a token, just like single-line comments.
     fn scan_multi_line_comment(&mut self) -> Result<TokenKind, String> {
         while let Some(ch) = self.bump() {
             if ch == '*' && self.peek() == Some('/') {
