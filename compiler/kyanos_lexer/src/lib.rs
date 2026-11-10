@@ -11,16 +11,26 @@ use kyanos_ast::Span;
 pub mod token;
 pub use token::{Token, TokenKind};
 
+/// Maximum allowed nesting depth for template string interpolations (`${ `...` }`).
+const MAX_TEMPLATE_NESTING: usize = 64;
+
 pub struct Lexer<'a> {
     /// The entire source code strings.
     input: &'a str,
     /// current byte offset position.
     cursor: usize,
+    /// Tracks whether a line terminator was encountered before or inside a trivia token (comment),
+    /// ensuring the next non-trivia token still receives `has_leading_newline = true`.
+    pending_newline: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self { input, cursor: 0 }
+        Self {
+            input,
+            cursor: 0,
+            pending_newline: false,
+        }
     }
 
     /// Look ahead at the current character (without consuming it)
@@ -114,8 +124,22 @@ impl<'a> Lexer<'a> {
         ch == '\r' || ch == '\n' || ch == '\u{2028}' || ch == '\u{2029}'
     }
 
+    /// Returns true if the character is a Unicode bidirectional control character
+    /// that could be used for Trojan Source attacks (CVE-2021-42574).
+    #[inline]
+    pub fn is_bidi_control(ch: char) -> bool {
+        matches!(
+            ch,
+            '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{061C}'
+                | '\u{200E}'
+                | '\u{200F}'
+        )
+    }
+
     // Identifier: IdentifierStart IdentifierPart* | '_' IdentifierPart+;
-    pub fn scan_identifier_or_keyword(&mut self) -> Option<String> {
+    pub fn scan_identifier_or_keyword(&mut self) -> Option<&'a str> {
         let first = self.peek()?;
         if first == '_' {
             // Identifiers starting with '_' must contain at least two characters (e.g. `_foo`, `__`).
@@ -130,20 +154,18 @@ impl<'a> Lexer<'a> {
             return None;
         }
 
+        let start = self.cursor;
         self.bump();
-        let mut ident = String::new();
-        ident.push(first);
 
         while let Some(ch) = self.peek() {
             if Self::is_identifier_part(ch) {
-                ident.push(ch);
                 self.bump();
             } else {
                 break;
             }
         }
 
-        Some(ident)
+        Some(&self.input[start..self.cursor])
     }
 
     // fragment IdentifierStart: [\p{ID_Start}] | '$';
@@ -178,26 +200,36 @@ impl<'a> Lexer<'a> {
 
     // next_token returns the next token kind.
     pub fn next_token(&mut self) -> Result<Token, String> {
-        // Skip whitespace and line terminators. and get if there were newlines.
-        let had_newline = self.skip_whitespace_and_newlines();
+        // Skip whitespace and line terminators, and combine with any newline carried across trivia.
+        let had_newline = self.skip_whitespace_and_newlines() || self.pending_newline;
 
         // Record the starting position of the token.
         let start = self.cursor;
 
-        // chech EOF
+        // check EOF
         let first = match self.peek() {
             Some(c) => c,
             None => {
+                self.pending_newline = false;
                 return Ok(Token::new(
                     TokenKind::Eof,
                     Span::new(start, start),
                     had_newline,
-                ))
+                ));
             }
         };
 
+        // Preserve leading newline across comments, or reset for normal tokens.
+        self.pending_newline = false;
+
         // scan token kind (internal self.cursor moves)
         let kind = self.scan_token_kind(first)?;
+
+        if kind.is_trivia() {
+            // Keep leading newline flag (plus any newline found inside a multi-line comment)
+            // so the subsequent non-trivia token still sees `has_leading_newline = true`.
+            self.pending_newline |= had_newline;
+        }
 
         // Record the end position of the token.
         let end = self.cursor;
@@ -225,7 +257,7 @@ impl<'a> Lexer<'a> {
                 }
 
                 // Keyword lookup or fallback to Identifier
-                let kind = TokenKind::from_keyword(&ident).unwrap_or(TokenKind::Identifier);
+                let kind = TokenKind::from_keyword(ident).unwrap_or(TokenKind::Identifier);
                 return Ok(kind);
             }
         }
@@ -320,7 +352,7 @@ impl<'a> Lexer<'a> {
     // / match rules
     fn slash_match(&mut self) -> Result<TokenKind, String> {
         if self.match_char('/') {
-            Ok(self.scan_single_line_comment())
+            self.scan_single_line_comment()
         } else if self.match_char('*') {
             self.scan_multi_line_comment()
         } else if self.match_char('=') {
@@ -331,22 +363,37 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scans a single-line comment: `// ...`
-    /// Comments are keeped as tokens during the lexical analysis phase so that they can be utilized by tools such as an LSP;
+    /// Comments are kept as tokens during the lexical analysis phase so that they can be utilized by tools such as an LSP;
     /// plan to implement a separate mechanism in the compiler's parser to skip those comments.
-    fn scan_single_line_comment(&mut self) -> TokenKind {
+    fn scan_single_line_comment(&mut self) -> Result<TokenKind, String> {
         while let Some(ch) = self.peek() {
             if Self::is_line_terminator(ch) {
                 break;
             }
+            if Self::is_bidi_control(ch) {
+                return Err(format!(
+                    "Unicode bidirectional control character U+{:04X} is not allowed in comments",
+                    ch as u32
+                ));
+            }
             self.bump();
         }
-        TokenKind::SingleLineComment
+        Ok(TokenKind::SingleLineComment)
     }
 
     /// Scans a multi-line comment: `/* ... */`
     /// Keep as a token, just like single-line comments.
     fn scan_multi_line_comment(&mut self) -> Result<TokenKind, String> {
         while let Some(ch) = self.bump() {
+            if Self::is_bidi_control(ch) {
+                return Err(format!(
+                    "Unicode bidirectional control character U+{:04X} is not allowed in comments",
+                    ch as u32
+                ));
+            }
+            if Self::is_line_terminator(ch) {
+                self.pending_newline = true;
+            }
             if ch == '*' && self.peek() == Some('/') {
                 self.bump(); // Consume '/'
                 return Ok(TokenKind::MultiLineComment);
@@ -488,49 +535,81 @@ impl<'a> Lexer<'a> {
     }
 
     // StringLiteral, CharLiteral, CStringLiteral
-    /// Scans an escape sequence right after consuming `\`.
-    fn scan_escape_sequence(&mut self) -> Result<(), String> {
+    /// Scans an escape sequence right after consuming `\` and returns the decoded Unicode scalar value.
+    fn scan_escape_sequence(&mut self) -> Result<char, String> {
         match self.bump() {
-            Some('\'' | '"' | '`' | '$' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'v' | '0') => {
-                Ok(())
-            }
+            Some('\'') => Ok('\''),
+            Some('"') => Ok('"'),
+            Some('`') => Ok('`'),
+            Some('$') => Ok('$'),
+            Some('\\') => Ok('\\'),
+            Some('/') => Ok('/'),
+            Some('b') => Ok('\u{0008}'),
+            Some('f') => Ok('\u{000C}'),
+            Some('n') => Ok('\n'),
+            Some('r') => Ok('\r'),
+            Some('t') => Ok('\t'),
+            Some('v') => Ok('\u{000B}'),
+            Some('0') => Ok('\0'),
             // unicode escape
             Some('u') => {
                 if self.match_char('{') {
-                    // \u{HexDigit+}
+                    // \u{HexDigit+} (1 to 6 hex digits, valid Unicode scalar value)
                     let mut count = 0;
+                    let mut value: u32 = 0;
                     while let Some(ch) = self.peek() {
-                        if ch.is_ascii_hexdigit() {
+                        if let Some(digit) = ch.to_digit(16) {
                             self.bump();
                             count += 1;
+                            if count > 6 {
+                                return Err(
+                                    "Unicode escape sequence must have at most 6 hex digits"
+                                        .to_string(),
+                                );
+                            }
+                            value = (value << 4) | digit;
                         } else if ch == '}' {
                             self.bump();
                             if count == 0 {
                                 return Err("Empty Unicode escape sequence".to_string());
                             }
-                            return Ok(());
+                            return char::from_u32(value).ok_or_else(|| {
+                                format!(
+                                    "Invalid Unicode scalar value in escape sequence: U+{:X}",
+                                    value
+                                )
+                            });
                         } else {
                             return Err(format!("Invalid character in Unicode escape: '{}'", ch));
                         }
                     }
                     Err("Unterminated Unicode escape sequence".to_string())
                 } else {
-                    // \uXXXX (4 hex digits)
+                    // \uXXXX (4 hex digits, valid Unicode scalar value)
+                    let mut value: u32 = 0;
                     for _ in 0..4 {
                         match self.bump() {
-                            Some(ch) if ch.is_ascii_hexdigit() => {}
                             Some(ch) => {
-                                return Err(format!(
-                                    "Invalid hex digit in Unicode escape: '{}'",
-                                    ch
-                                ))
+                                if let Some(digit) = ch.to_digit(16) {
+                                    value = (value << 4) | digit;
+                                } else {
+                                    return Err(format!(
+                                        "Invalid hex digit in Unicode escape: '{}'",
+                                        ch
+                                    ));
+                                }
                             }
                             None => {
                                 return Err("Unexpected EOF in Unicode escape sequence".to_string())
                             }
                         }
                     }
-                    Ok(())
+                    char::from_u32(value).ok_or_else(|| {
+                        format!(
+                            "Invalid Unicode scalar value in escape sequence: U+{:04X}",
+                            value
+                        )
+                    })
                 }
             }
             Some(c) => Err(format!("Invalid escape sequence: '\\{}'", c)),
@@ -544,7 +623,17 @@ impl<'a> Lexer<'a> {
             if ch == '"' {
                 return Ok(kind);
             } else if ch == '\\' {
-                self.scan_escape_sequence()?;
+                let escaped = self.scan_escape_sequence()?;
+                if kind == TokenKind::CStringLiteral && escaped == '\0' {
+                    return Err("Null byte is not allowed inside C-string literal".to_string());
+                }
+            } else if kind == TokenKind::CStringLiteral && ch == '\0' {
+                return Err("Null byte is not allowed inside C-string literal".to_string());
+            } else if Self::is_bidi_control(ch) {
+                return Err(format!(
+                    "Unicode bidirectional control character U+{:04X} is not allowed in string literals",
+                    ch as u32
+                ));
             } else if Self::is_line_terminator(ch) {
                 return Err("Unterminated string literal: newline in string".to_string());
             }
@@ -558,6 +647,12 @@ impl<'a> Lexer<'a> {
             Some('\'') => return Err("Empty character literal".to_string()),
             Some('\\') => {
                 self.scan_escape_sequence()?;
+            }
+            Some(ch) if Self::is_bidi_control(ch) => {
+                return Err(format!(
+                    "Unicode bidirectional control character U+{:04X} is not allowed in character literals",
+                    ch as u32
+                ));
             }
             Some(ch) if Self::is_line_terminator(ch) => {
                 return Err(
@@ -644,10 +739,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Verifies that no identifier characters or digits immediately follow a numeric literal (e.g. `123foo`).
+    /// Verifies that no identifier characters, underscores, or digits immediately follow a numeric literal (e.g. `123foo`, `0_123`).
     fn check_no_ident_suffix(&mut self) -> Result<(), String> {
         if let Some(ch) = self.peek() {
-            if Self::is_identifier_start(ch) || ch.is_ascii_digit() {
+            if Self::is_identifier_part(ch) {
                 return Err(format!(
                     "Invalid character '{}' following numeric literal",
                     ch
@@ -745,15 +840,39 @@ impl<'a> Lexer<'a> {
 
     /// Scans a template string literal: `` `...${expr}...` ``
     fn scan_template_string_literal(&mut self) -> Result<TokenKind, String> {
+        self.scan_template_string_literal_with_depth(0)
+    }
+
+    fn scan_template_string_literal_with_depth(
+        &mut self,
+        depth: usize,
+    ) -> Result<TokenKind, String> {
+        if depth > MAX_TEMPLATE_NESTING {
+            return Err(
+                "Template string interpolation nesting depth exceeded maximum limit".to_string(),
+            );
+        }
+
         while let Some(ch) = self.bump() {
             if ch == '`' {
                 return Ok(TokenKind::TemplateStringLiteral);
             } else if ch == '\\' {
                 self.scan_escape_sequence()?;
+            } else if Self::is_bidi_control(ch) {
+                return Err(format!(
+                    "Unicode bidirectional control character U+{:04X} is not allowed in template literals",
+                    ch as u32
+                ));
             } else if ch == '$' && self.match_char('{') {
                 // Template interpolation: ${...}
-                let mut brace_depth = 1;
+                let mut brace_depth = 1usize;
                 while let Some(next_ch) = self.bump() {
+                    if Self::is_bidi_control(next_ch) {
+                        return Err(format!(
+                            "Unicode bidirectional control character U+{:04X} is not allowed in template expressions",
+                            next_ch as u32
+                        ));
+                    }
                     match next_ch {
                         '{' => brace_depth += 1,
                         '}' => {
@@ -762,20 +881,27 @@ impl<'a> Lexer<'a> {
                                 break;
                             }
                         }
+                        'c' if self.peek() == Some('"') => {
+                            self.bump(); // consume '"'
+                            self.scan_string_contents(TokenKind::CStringLiteral)?;
+                        }
                         '"' => {
                             self.scan_string_contents(TokenKind::StringLiteral)?;
                         }
                         '\'' => {
                             self.scan_char_literal()?;
                         }
+                        '`' => {
+                            self.scan_template_string_literal_with_depth(depth + 1)?;
+                        }
+                        '/' if self.match_char('/') => {
+                            self.scan_single_line_comment()?;
+                        }
+                        '/' if self.match_char('*') => {
+                            self.scan_multi_line_comment()?;
+                        }
                         '\\' => {
                             self.scan_escape_sequence()?;
-                        }
-                        c if Self::is_line_terminator(c) => {
-                            return Err(
-                                "Unterminated template interpolation: newline in template expression"
-                                    .to_string(),
-                            );
                         }
                         _ => {}
                     }

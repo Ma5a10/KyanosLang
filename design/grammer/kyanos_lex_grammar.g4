@@ -170,8 +170,8 @@ Sizeof: 'sizeof';
 
 // Float literal
 FloatLiteral:
-	Digit+ '.' Digit+ ExponentPart?
-	| Digit+ ExponentPart;
+	DecimalDigits '.' DecimalDigits ExponentPart?
+	| DecimalDigits ExponentPart;
 
 // Integer literals (Dec, Hex, Bin, Oct) with optional underscores
 IntegerLiteral:
@@ -191,6 +191,8 @@ BigIntLiteral:
 
 fragment DecimalIntegerLiteral: '0' | [1-9] ('_'? Digit)*;
 
+fragment DecimalDigits: Digit ('_'? Digit)*;
+
 fragment HexIntegerLiteral: '0' [xX] HexDigit ('_'? HexDigit)*;
 
 fragment OctalIntegerLiteral:
@@ -199,7 +201,7 @@ fragment OctalIntegerLiteral:
 fragment BinaryIntegerLiteral:
 	'0' [bB] BinaryDigit ('_'? BinaryDigit)*;
 
-fragment ExponentPart: [eE] [+-]? Digit+;
+fragment ExponentPart: [eE] [+-]? DecimalDigits;
 
 // Standard String Literal ("...")
 StringLiteral: '"' ( EscapeSequence | ~["\\\r\n])* '"';
@@ -218,7 +220,7 @@ fragment TemplateInterpolation:
 	'${' (StringLiteral | CharLiteral | ~[}\r\n])* '}';
 
 fragment EscapeSequence:
-	'\\' (['"\\/bfnrtv] | '0' | UnicodeEscape);
+	'\\' (['"`$\\/bfnrtv] | '0' | UnicodeEscape);
 
 fragment Digit: [0-9];
 

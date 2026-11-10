@@ -88,19 +88,13 @@ fn test_identifier_start_and_part() {
 #[test]
 fn test_scan_identifier() {
     let mut lexer = Lexer::new("foo_bar123 $val _temp __");
-    assert_eq!(
-        lexer.scan_identifier_or_keyword(),
-        Some("foo_bar123".to_string())
-    );
+    assert_eq!(lexer.scan_identifier_or_keyword(), Some("foo_bar123"));
     lexer.skip_whitespace();
-    assert_eq!(lexer.scan_identifier_or_keyword(), Some("$val".to_string()));
+    assert_eq!(lexer.scan_identifier_or_keyword(), Some("$val"));
     lexer.skip_whitespace();
-    assert_eq!(
-        lexer.scan_identifier_or_keyword(),
-        Some("_temp".to_string())
-    );
+    assert_eq!(lexer.scan_identifier_or_keyword(), Some("_temp"));
     lexer.skip_whitespace();
-    assert_eq!(lexer.scan_identifier_or_keyword(), Some("__".to_string()));
+    assert_eq!(lexer.scan_identifier_or_keyword(), Some("__"));
 
     // Single '_' should not be scanned as an identifier
     let mut wildcard_lexer = Lexer::new("_");
@@ -681,7 +675,7 @@ fn test_string_literal() {
 
 #[test]
 fn test_c_string_literal() {
-    let tokens = tokenize(r#"c"hello C-string\0" c"" c"#).unwrap();
+    let tokens = tokenize(r#"c"hello C-string\n" c"" c"#).unwrap();
     assert_eq!(
         tokens,
         vec![
@@ -701,6 +695,12 @@ fn test_c_string_literal() {
             TokenKind::CStringLiteral,
         ]
     );
+
+    // Null bytes inside C-string literals must be rejected (Null Byte Injection prevention)
+    assert!(Lexer::new(r#"c"hello\0world""#).next_token().is_err());
+    assert!(Lexer::new(r#"c"hello\u0000world""#).next_token().is_err());
+    assert!(Lexer::new(r#"c"hello\u{0}world""#).next_token().is_err());
+    assert!(Lexer::new("c\"hello\0world\"").next_token().is_err());
 }
 
 #[test]
@@ -1118,4 +1118,99 @@ fn test_leading_newline_first_token() {
     let tok = lexer.next_token().unwrap();
     assert_eq!(tok.kind, TokenKind::Let);
     assert!(tok.has_leading_newline);
+}
+
+#[test]
+fn test_numeric_underscore_and_ident_suffix_errors() {
+    assert!(Lexer::new("0_123").next_token().is_err());
+    assert!(Lexer::new("0_abc").next_token().is_err());
+    assert!(Lexer::new("0_").next_token().is_err());
+    assert!(Lexer::new("10n_abc").next_token().is_err());
+    assert!(Lexer::new("1.5_abc").next_token().is_err());
+    assert!(Lexer::new("1e5_abc").next_token().is_err());
+    assert!(Lexer::new("0x10_").next_token().is_err());
+}
+
+#[test]
+fn test_template_string_nested_and_comments() {
+    // Nested template literal inside interpolation
+    let nested_tpl = tokenize(r#"`outer ${`inner ${1 + 2}`}`"#).unwrap();
+    assert_eq!(nested_tpl, vec![TokenKind::TemplateStringLiteral]);
+
+    // Multi-line comment containing '}' inside interpolation
+    let comment_brace = tokenize(r#"`val: ${ /* } */ 42 }`"#).unwrap();
+    assert_eq!(comment_brace, vec![TokenKind::TemplateStringLiteral]);
+
+    // Single-line comment containing '}' and multi-line expression inside interpolation
+    let line_comment_brace = tokenize("`val: ${ // }\n 42 }`").unwrap();
+    assert_eq!(line_comment_brace, vec![TokenKind::TemplateStringLiteral]);
+
+    // Excessive nesting depth should fail safely without stack overflow
+    let deep = "`${".repeat(70) + "1" + &"}`".repeat(70);
+    assert!(Lexer::new(&deep).next_token().is_err());
+}
+
+#[test]
+fn test_leading_newline_across_comments() {
+    // Newline before inline multi-line comment carries over to the following token
+    let mut lexer1 = Lexer::new("let a = 1\n/* inline */ let b = 2");
+    assert_eq!(lexer1.next_token().unwrap().kind, TokenKind::Let);
+    assert_eq!(lexer1.next_token().unwrap().kind, TokenKind::Identifier);
+    assert_eq!(lexer1.next_token().unwrap().kind, TokenKind::Assign);
+    assert_eq!(lexer1.next_token().unwrap().kind, TokenKind::IntegerLiteral);
+
+    let comment1 = lexer1.next_token().unwrap();
+    assert_eq!(comment1.kind, TokenKind::MultiLineComment);
+    assert!(comment1.has_leading_newline);
+
+    let let_b1 = lexer1.next_token().unwrap();
+    assert_eq!(let_b1.kind, TokenKind::Let);
+    assert!(let_b1.has_leading_newline);
+
+    // Newline inside multi-line comment carries over to the following token
+    let mut lexer2 = Lexer::new("let a = 1 /* multi\nline */ let b = 2");
+    assert_eq!(lexer2.next_token().unwrap().kind, TokenKind::Let);
+    assert_eq!(lexer2.next_token().unwrap().kind, TokenKind::Identifier);
+    assert_eq!(lexer2.next_token().unwrap().kind, TokenKind::Assign);
+    assert_eq!(lexer2.next_token().unwrap().kind, TokenKind::IntegerLiteral);
+
+    let comment2 = lexer2.next_token().unwrap();
+    assert_eq!(comment2.kind, TokenKind::MultiLineComment);
+    assert!(!comment2.has_leading_newline);
+
+    let let_b2 = lexer2.next_token().unwrap();
+    assert_eq!(let_b2.kind, TokenKind::Let);
+    assert!(let_b2.has_leading_newline);
+}
+
+#[test]
+fn test_unicode_escape_validation() {
+    // Valid boundary scalar values
+    assert!(Lexer::new(r#""\u{10FFFF}""#).next_token().is_ok());
+    assert!(Lexer::new(r#""\u{0}""#).next_token().is_ok());
+
+    // Out of range (> 0x10FFFF)
+    assert!(Lexer::new(r#""\u{110000}""#).next_token().is_err());
+
+    // Too many hex digits (> 6)
+    assert!(Lexer::new(r#""\u{0000041}""#).next_token().is_err());
+
+    // Surrogate code points (0xD800..=0xDFFF) must be rejected
+    assert!(Lexer::new(r#""\u{D800}""#).next_token().is_err());
+    assert!(Lexer::new(r#""\u{DFFF}""#).next_token().is_err());
+    assert!(Lexer::new(r#""\uD800""#).next_token().is_err());
+}
+
+#[test]
+fn test_trojan_source_bidi_control_rejected() {
+    // BiDi control characters (e.g. U+202E RIGHT-TO-LEFT OVERRIDE) in comments and literals
+    assert!(Lexer::new("// safe \u{202E} evil").next_token().is_err());
+    assert!(Lexer::new("/* safe \u{202E} evil */").next_token().is_err());
+    assert!(Lexer::new("\"safe \u{202E} evil\"").next_token().is_err());
+    assert!(Lexer::new("'\u{202E}'").next_token().is_err());
+    assert!(Lexer::new("`safe \u{2066} evil`").next_token().is_err());
+    assert!(Lexer::new("`${\u{202E}}`").next_token().is_err());
+
+    // Escaped BiDi control character in string literal is explicit and allowed
+    assert!(Lexer::new(r#""\u202E""#).next_token().is_ok());
 }
