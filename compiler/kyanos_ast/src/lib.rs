@@ -6,8 +6,19 @@
 
 //! AST (Abstract Syntax Tree) definitions for the Kyanos programming language.
 
+pub mod ident;
+pub mod literal;
+pub mod op;
+
+pub use ident::{Ident, PrivateIdent};
+pub use literal::{
+    BigIntLiteral, CStringLiteral, CharLiteral, FloatLiteral, IntegerLiteral, Literal, LiteralKind,
+    Radix, StringLiteral,
+};
+pub use op::{AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
+
 /// Represents a source code span [start, end) byte offsets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -16,5 +27,13 @@ pub struct Span {
 impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
+    }
+
+    /// Returns a new span that covers both `self` and `other`.
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
     }
 }
