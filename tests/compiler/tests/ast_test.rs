@@ -7,9 +7,11 @@
 //! Unified tests for Kyanos AST nodes and data structures.
 
 use kyanos_ast::{
-    AnonymousStructField, ArraySize, AssignOp, Associativity, BinaryOp, FunctionType,
-    FunctionTypeParam, Ident, Literal, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent,
-    Radix, ReturnType, Span, Type, TypeArguments, TypeKind, TypeName, TypeParameter,
+    AnonymousStructField, Argument, ArrayElement, ArraySize, ArrowBody, AssignOp, Associativity,
+    BinaryOp, Block, Expr, ExprKind, FunctionParam, FunctionType, FunctionTypeParam, Ident,
+    Literal, MemberProperty, ObjectMember, Pattern, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    PrivateIdent, PropertyName, Radix, ReturnType, SizeofTarget, Span, StructFieldInit,
+    SwitchExprArm, TemplateStringPart, Type, TypeArguments, TypeKind, TypeName, TypeParameter,
     TypeParameters, TypePredicate, TypeReference,
 };
 
@@ -308,4 +310,307 @@ fn test_function_type_and_type_predicate() {
     );
     let ret_pred = ReturnType::Predicate(pred);
     assert_eq!(ret_pred.span(), Span::new(0, 13));
+}
+
+// =============================================================================
+// Expression Tests
+// =============================================================================
+
+#[test]
+fn test_binary_and_unary_expressions() {
+    let a = Expr::ident(Ident::new("a", Span::new(0, 1)));
+    let b = Expr::ident(Ident::new("b", Span::new(4, 5)));
+
+    // a + b
+    let add_expr = Expr::binary(BinaryOp::Add, a.clone(), b.clone());
+    assert_eq!(add_expr.span, Span::new(0, 5));
+    if let ExprKind::Binary { op, left, right } = add_expr.kind {
+        assert_eq!(op, BinaryOp::Add);
+        assert_eq!(*left, a);
+        assert_eq!(*right, b);
+    } else {
+        panic!("expected ExprKind::Binary");
+    }
+
+    // Prefix: -a, try res, await task
+    let neg = Expr::unary_prefix(PrefixUnaryOp::Minus, a.clone(), Span::new(0, 2));
+    assert_eq!(neg.span, Span::new(0, 2));
+
+    let try_expr = Expr::unary_prefix(PrefixUnaryOp::Try, a.clone(), Span::new(0, 6));
+    if let ExprKind::UnaryPrefix { op, target } = try_expr.kind {
+        assert_eq!(op, PrefixUnaryOp::Try);
+        assert_eq!(*target, a);
+    } else {
+        panic!("expected ExprKind::UnaryPrefix");
+    }
+
+    // Postfix: a++, a!
+    let inc = Expr::unary_postfix(PostfixUnaryOp::PostInc, a.clone(), Span::new(0, 3));
+    let non_null = Expr::unary_postfix(PostfixUnaryOp::NonNull, a, Span::new(0, 2));
+    assert_eq!(inc.span, Span::new(0, 3));
+    assert_eq!(non_null.span, Span::new(0, 2));
+}
+
+#[test]
+fn test_call_and_member_expressions() {
+    let callee = Expr::ident(Ident::new("compute", Span::new(0, 7)));
+    let arg1 = Argument::normal(Expr::literal(Literal::integer(
+        "10",
+        10,
+        Radix::Decimal,
+        Span::new(8, 10),
+    )));
+    let arg2 = Argument::spread(
+        Expr::ident(Ident::new("rest", Span::new(15, 19))),
+        Span::new(12, 19),
+    );
+
+    // compute(10, ...rest)
+    let call = Expr::call(callee.clone(), None, vec![arg1, arg2], Span::new(0, 20));
+    if let ExprKind::Call {
+        callee: c,
+        type_arguments,
+        args,
+    } = call.kind
+    {
+        assert_eq!(*c, callee);
+        assert!(type_arguments.is_none());
+        assert_eq!(args.len(), 2);
+        assert!(args[1].is_spread);
+    } else {
+        panic!("expected ExprKind::Call");
+    }
+
+    // obj.prop and obj.#privateProp
+    let obj = Expr::ident(Ident::new("obj", Span::new(0, 3)));
+    let member_pub = Expr::member(
+        obj.clone(),
+        MemberProperty::Ident(Ident::new("field", Span::new(4, 9))),
+        Span::new(0, 9),
+    );
+    let member_priv = Expr::member(
+        obj.clone(),
+        MemberProperty::Private(PrivateIdent::new("#secret", Span::new(4, 11))),
+        Span::new(0, 11),
+    );
+
+    assert_eq!(member_pub.span, Span::new(0, 9));
+    assert_eq!(member_priv.span, Span::new(0, 11));
+
+    // Index: arr[0] and optArr?.[0]
+    let index_expr = Expr::literal(Literal::integer("0", 0, Radix::Decimal, Span::new(4, 5)));
+    let idx = Expr::index(obj.clone(), index_expr.clone(), false, Span::new(0, 6));
+    let opt_idx = Expr::index(obj, index_expr, true, Span::new(0, 7));
+
+    if let ExprKind::Index { is_optional, .. } = idx.kind {
+        assert!(!is_optional);
+    }
+    if let ExprKind::Index { is_optional, .. } = opt_idx.kind {
+        assert!(is_optional);
+    }
+}
+
+#[test]
+fn test_literal_complex_expressions() {
+    // Array: [1, ...rest, 3]
+    let elem1 = ArrayElement::normal(Expr::literal(Literal::integer(
+        "1",
+        1,
+        Radix::Decimal,
+        Span::new(1, 2),
+    )));
+    let elem2 = ArrayElement::spread(
+        Expr::ident(Ident::new("rest", Span::new(7, 11))),
+        Span::new(4, 11),
+    );
+    let array_expr = Expr::new(ExprKind::Array(vec![elem1, elem2]), Span::new(0, 15));
+    if let ExprKind::Array(elems) = array_expr.kind {
+        assert_eq!(elems.len(), 2);
+        assert!(elems[1].is_spread);
+    } else {
+        panic!("expected ExprKind::Array");
+    }
+
+    // Object: { x: 10, ...rest }
+    let obj_prop = ObjectMember::Property {
+        name: PropertyName::Ident(Ident::new("x", Span::new(2, 3))),
+        value: Expr::literal(Literal::integer("10", 10, Radix::Decimal, Span::new(5, 7))),
+        span: Span::new(2, 7),
+    };
+    let obj_spread = ObjectMember::Spread {
+        expr: Expr::ident(Ident::new("rest", Span::new(12, 16))),
+        span: Span::new(9, 16),
+    };
+    let obj_expr = Expr::new(
+        ExprKind::Object(vec![obj_prop, obj_spread]),
+        Span::new(0, 18),
+    );
+    if let ExprKind::Object(members) = obj_expr.kind {
+        assert_eq!(members.len(), 2);
+    } else {
+        panic!("expected ExprKind::Object");
+    }
+
+    // Struct Instantiation: Point { x: 10, ...other }
+    let struct_init = Expr::new(
+        ExprKind::StructInstantiation {
+            struct_name: TypeName::single(Ident::new("Point", Span::new(0, 5))),
+            type_arguments: None,
+            fields: vec![
+                StructFieldInit::Field {
+                    name: Ident::new("x", Span::new(8, 9)),
+                    value: Some(Expr::literal(Literal::integer(
+                        "10",
+                        10,
+                        Radix::Decimal,
+                        Span::new(11, 13),
+                    ))),
+                    span: Span::new(8, 13),
+                },
+                StructFieldInit::Spread {
+                    expr: Expr::ident(Ident::new("other", Span::new(18, 23))),
+                    span: Span::new(15, 23),
+                },
+            ],
+        },
+        Span::new(0, 25),
+    );
+    if let ExprKind::StructInstantiation {
+        struct_name,
+        fields,
+        ..
+    } = struct_init.kind
+    {
+        assert_eq!(struct_name.to_string(), "Point");
+        assert_eq!(fields.len(), 2);
+    } else {
+        panic!("expected ExprKind::StructInstantiation");
+    }
+}
+
+#[test]
+fn test_control_and_functional_expressions() {
+    // Arrow Function: (x: int): int => x + 1
+    let param = FunctionParam::simple(
+        Ident::new("x", Span::new(1, 2)),
+        Some(Type::predefined(PredefinedType::Int, Span::new(4, 7))),
+        Span::new(1, 7),
+    );
+    let body = Expr::binary(
+        BinaryOp::Add,
+        Expr::ident(Ident::new("x", Span::new(19, 20))),
+        Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(23, 24))),
+    );
+    let arrow = Expr::new(
+        ExprKind::ArrowFunction {
+            is_async: false,
+            type_parameters: None,
+            params: vec![param],
+            return_type: Some(ReturnType::Type(Type::predefined(
+                PredefinedType::Int,
+                Span::new(10, 13),
+            ))),
+            body: ArrowBody::Expr(Box::new(body)),
+        },
+        Span::new(0, 24),
+    );
+    if let ExprKind::ArrowFunction {
+        is_async, params, ..
+    } = arrow.kind
+    {
+        assert!(!is_async);
+        assert_eq!(params.len(), 1);
+    } else {
+        panic!("expected ExprKind::ArrowFunction");
+    }
+
+    // Switch Expression: switch (x) { case 1 => "one", default => "other" }
+    let target = Expr::ident(Ident::new("x", Span::new(8, 9)));
+    let arm1 = SwitchExprArm::Case {
+        pattern: Pattern::literal(
+            Literal::integer("1", 1, Radix::Decimal, Span::new(18, 19)),
+            Span::new(18, 19),
+        ),
+        guard: None,
+        body: Box::new(Expr::literal(Literal::string(
+            "one",
+            "\"one\"",
+            Span::new(23, 28),
+        ))),
+        span: Span::new(13, 28),
+    };
+    let arm2 = SwitchExprArm::Default {
+        body: Box::new(Expr::literal(Literal::string(
+            "other",
+            "\"other\"",
+            Span::new(41, 48),
+        ))),
+        span: Span::new(30, 48),
+    };
+    let switch_expr = Expr::new(
+        ExprKind::Switch {
+            target: Box::new(target),
+            arms: vec![arm1, arm2],
+        },
+        Span::new(0, 50),
+    );
+    if let ExprKind::Switch { arms, .. } = switch_expr.kind {
+        assert_eq!(arms.len(), 2);
+    } else {
+        panic!("expected ExprKind::Switch");
+    }
+
+    // Ternary: cond ? a : b
+    let cond = Expr::ident(Ident::new("cond", Span::new(0, 4)));
+    let then_expr = Expr::ident(Ident::new("a", Span::new(7, 8)));
+    let else_expr = Expr::ident(Ident::new("b", Span::new(11, 12)));
+    let ternary = Expr::ternary(cond, then_expr, else_expr);
+    assert_eq!(ternary.span, Span::new(0, 12));
+
+    // Cast: x as int
+    let x = Expr::ident(Ident::new("x", Span::new(0, 1)));
+    let cast = Expr::cast(
+        x,
+        Type::predefined(PredefinedType::Int, Span::new(5, 8)),
+        Span::new(0, 8),
+    );
+    assert_eq!(cast.span, Span::new(0, 8));
+
+    // Assign: x += 10
+    let target_var = Expr::ident(Ident::new("x", Span::new(0, 1)));
+    let val = Expr::literal(Literal::integer("10", 10, Radix::Decimal, Span::new(5, 7)));
+    let assign = Expr::assign(AssignOp::AddAssign, target_var, val);
+    assert_eq!(assign.span, Span::new(0, 7));
+
+    // Unsafe Block: unsafe { ... }
+    let unsafe_expr = Expr::new(
+        ExprKind::Unsafe(Block::empty(Span::new(7, 9))),
+        Span::new(0, 9),
+    );
+    assert_eq!(unsafe_expr.span, Span::new(0, 9));
+
+    // Sizeof: sizeof(int)
+    let sizeof_expr = Expr::new(
+        ExprKind::Sizeof(SizeofTarget::Type(Type::predefined(
+            PredefinedType::Int,
+            Span::new(7, 10),
+        ))),
+        Span::new(0, 11),
+    );
+    assert_eq!(sizeof_expr.span, Span::new(0, 11));
+
+    // Template String: `Hello, ${name}!`
+    let tmpl = Expr::new(
+        ExprKind::TemplateString(vec![
+            TemplateStringPart::String("Hello, ".to_string()),
+            TemplateStringPart::Expr(Box::new(Expr::ident(Ident::new("name", Span::new(10, 14))))),
+            TemplateStringPart::String("!".to_string()),
+        ]),
+        Span::new(0, 17),
+    );
+    if let ExprKind::TemplateString(parts) = tmpl.kind {
+        assert_eq!(parts.len(), 3);
+    } else {
+        panic!("expected ExprKind::TemplateString");
+    }
 }

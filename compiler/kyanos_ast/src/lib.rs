@@ -6,17 +6,28 @@
 
 //! AST (Abstract Syntax Tree) definitions for the Kyanos programming language.
 
+pub mod expr;
 pub mod ident;
 pub mod literal;
 pub mod op;
+pub mod pattern;
+pub mod stmt;
 pub mod types;
 
+pub use expr::{
+    Argument, ArrayElement, ArrowBody, Expr, ExprKind, FunctionParam, MemberProperty, ObjectMember,
+    ObjectMethod, PropertyName, SizeofTarget, StructFieldInit, SwitchExprArm, TemplateStringPart,
+};
 pub use ident::{Ident, PrivateIdent};
 pub use literal::{
     BigIntLiteral, CStringLiteral, CharLiteral, FloatLiteral, IntegerLiteral, Literal, LiteralKind,
     Radix, StringLiteral,
 };
 pub use op::{AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
+pub use pattern::{
+    ObjectPatternProp, Pattern, PatternKind, StructFieldPattern, TuplePatternElement,
+};
+pub use stmt::{Block, Stmt, StmtKind};
 pub use types::{
     AnonymousStructField, ArraySize, FunctionType, FunctionTypeParam, PredefinedType, ReturnType,
     Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate,
