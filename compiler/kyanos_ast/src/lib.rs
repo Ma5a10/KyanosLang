@@ -9,6 +9,7 @@
 pub mod ident;
 pub mod literal;
 pub mod op;
+pub mod types;
 
 pub use ident::{Ident, PrivateIdent};
 pub use literal::{
@@ -16,6 +17,11 @@ pub use literal::{
     Radix, StringLiteral,
 };
 pub use op::{AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
+pub use types::{
+    AnonymousStructField, ArraySize, FunctionType, FunctionTypeParam, PredefinedType, ReturnType,
+    Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate,
+    TypeReference,
+};
 
 /// Represents a source code span [start, end) byte offsets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
