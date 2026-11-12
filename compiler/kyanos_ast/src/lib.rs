@@ -69,3 +69,169 @@ impl Span {
         }
     }
 }
+
+// =============================================================================
+// Module & Root AST (ES Modules Style)
+// =============================================================================
+
+/// An imported symbol with an optional local alias: `Foo` or `Bar as Baz`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportSpecifier {
+    pub name: Ident,
+    pub alias: Option<Ident>,
+    pub span: Span,
+}
+
+impl ImportSpecifier {
+    pub fn new(name: Ident, alias: Option<Ident>, span: Span) -> Self {
+        Self { name, alias, span }
+    }
+
+    pub fn simple(name: Ident) -> Self {
+        let span = name.span;
+        Self::new(name, None, span)
+    }
+}
+
+/// The specific form of an import clause.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportClause {
+    /// Named bindings: `import { Foo, Bar as Baz } from "./module";`.
+    Named(Vec<ImportSpecifier>),
+    /// Namespace wildcard: `import * as Math from "./math";`.
+    Namespace(Ident),
+    /// Default import with optional named bindings: `import Item, { Foo } from "./item";`.
+    Default {
+        default_name: Ident,
+        named: Vec<ImportSpecifier>,
+    },
+}
+
+/// An import statement: `import ... from "path";` or `import "side_effect";`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStmt {
+    pub clause: Option<ImportClause>,
+    pub source: StringLiteral,
+    pub span: Span,
+}
+
+impl ImportStmt {
+    pub fn new(clause: Option<ImportClause>, source: StringLiteral, span: Span) -> Self {
+        Self {
+            clause,
+            source,
+            span,
+        }
+    }
+
+    pub fn side_effect(source: StringLiteral, span: Span) -> Self {
+        Self::new(None, source, span)
+    }
+}
+
+/// An exported symbol with an optional exported alias: `Foo` or `Bar as Baz`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExportSpecifier {
+    pub name: Ident,
+    pub alias: Option<Ident>,
+    pub span: Span,
+}
+
+impl ExportSpecifier {
+    pub fn new(name: Ident, alias: Option<Ident>, span: Span) -> Self {
+        Self { name, alias, span }
+    }
+
+    pub fn simple(name: Ident) -> Self {
+        let span = name.span;
+        Self::new(name, None, span)
+    }
+}
+
+/// Specific variant of an export statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportKind {
+    /// Exporting a declaration: `export function add() {}` or `export struct Point {}`.
+    Decl(Decl),
+    /// Named export list or re-export: `export { Foo, Bar as Baz } from "./module";`.
+    Named {
+        specifiers: Vec<ExportSpecifier>,
+        source: Option<StringLiteral>,
+    },
+    /// Default expression export: `export default expr;`.
+    Default(Expr),
+}
+
+/// An export statement: `export ...` with optional attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportStmt {
+    pub attributes: Vec<Attribute>,
+    pub kind: ExportKind,
+    pub span: Span,
+}
+
+impl ExportStmt {
+    pub fn new(attributes: Vec<Attribute>, kind: ExportKind, span: Span) -> Self {
+        Self {
+            attributes,
+            kind,
+            span,
+        }
+    }
+
+    pub fn decl(attributes: Vec<Attribute>, decl: Decl, span: Span) -> Self {
+        Self::new(attributes, ExportKind::Decl(decl), span)
+    }
+
+    pub fn named(
+        specifiers: Vec<ExportSpecifier>,
+        source: Option<StringLiteral>,
+        span: Span,
+    ) -> Self {
+        Self::new(Vec::new(), ExportKind::Named { specifiers, source }, span)
+    }
+
+    pub fn default_expr(expr: Expr, span: Span) -> Self {
+        Self::new(Vec::new(), ExportKind::Default(expr), span)
+    }
+}
+
+/// A top-level source element within a Kyanos file / module.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SourceElement {
+    Import(ImportStmt),
+    Export(ExportStmt),
+    Decl(Decl),
+    Stmt(Stmt),
+}
+
+impl SourceElement {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Import(i) => i.span,
+            Self::Export(e) => e.span,
+            Self::Decl(d) => d.span,
+            Self::Stmt(s) => s.span,
+        }
+    }
+}
+
+/// Root AST node representing an entire Kyanos module / compilation unit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub elements: Vec<SourceElement>,
+    pub span: Span,
+}
+
+impl Program {
+    pub fn new(elements: Vec<SourceElement>, span: Span) -> Self {
+        Self { elements, span }
+    }
+
+    pub fn empty(span: Span) -> Self {
+        Self {
+            elements: Vec::new(),
+            span,
+        }
+    }
+}

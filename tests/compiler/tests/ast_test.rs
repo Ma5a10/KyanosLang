@@ -10,17 +10,18 @@ use kyanos_ast::{
     Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement, ArraySize,
     ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, BinaryOp, BindingTarget, Block,
     ClassDecl, ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl,
-    DeclKind, EnumDecl, EnumVariant, Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl,
-    ExternMember, ExternParameterList, ForInit, ForIterationKind, ForStmt, FunctionDecl,
-    FunctionParam, FunctionType, FunctionTypeParam, GetterSetterDecl, Ident, IndexSignature,
+    DeclKind, EnumDecl, EnumVariant, ExportKind, ExportSpecifier, ExportStmt, Expr, ExprKind,
+    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ForInit,
+    ForIterationKind, ForStmt, FunctionDecl, FunctionParam, FunctionType, FunctionTypeParam,
+    GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature,
     InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, Literal, MemberProperty,
     MethodDecl, ObjectMember, ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind,
-    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, PropertyName, Radix,
-    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, Span, Stmt, StmtKind, StringLiteral,
-    StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember, SwitchCase,
-    SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments,
-    TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
-    VariableDecl,
+    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix,
+    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind,
+    StringLiteral, StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember,
+    SwitchCase, SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl,
+    TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference,
+    VarModifier, VariableDecl,
 };
 
 // =============================================================================
@@ -1353,4 +1354,157 @@ fn test_enum_type_alias_and_ffi_declarations() {
     } else {
         panic!("expected DeclKind::SingleExtern");
     }
+}
+
+// =============================================================================
+// Module & Root AST Tests
+// =============================================================================
+
+#[test]
+fn test_import_statements() {
+    // import { Foo, Bar as Baz } from "./module";
+    let spec1 = ImportSpecifier::simple(Ident::new("Foo", Span::new(9, 12)));
+    let spec2 = ImportSpecifier::new(
+        Ident::new("Bar", Span::new(14, 17)),
+        Some(Ident::new("Baz", Span::new(21, 24))),
+        Span::new(14, 24),
+    );
+    let named_import = ImportStmt::new(
+        Some(ImportClause::Named(vec![spec1, spec2])),
+        StringLiteral::new("./module", "\"./module\""),
+        Span::new(0, 42),
+    );
+    if let Some(ImportClause::Named(specs)) = &named_import.clause {
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name.as_str(), "Foo");
+        assert_eq!(specs[1].alias.as_ref().unwrap().as_str(), "Baz");
+    } else {
+        panic!("expected ImportClause::Named");
+    }
+
+    // import * as Math from "./math";
+    let ns_import = ImportStmt::new(
+        Some(ImportClause::Namespace(Ident::new("Math", Span::new(12, 16)))),
+        StringLiteral::new("./math", "\"./math\""),
+        Span::new(0, 32),
+    );
+    if let Some(ImportClause::Namespace(ns)) = &ns_import.clause {
+        assert_eq!(ns.as_str(), "Math");
+    } else {
+        panic!("expected ImportClause::Namespace");
+    }
+
+    // import Item, { SubItem } from "./item";
+    let def_import = ImportStmt::new(
+        Some(ImportClause::Default {
+            default_name: Ident::new("Item", Span::new(7, 11)),
+            named: vec![ImportSpecifier::simple(Ident::new("SubItem", Span::new(15, 22)))],
+        }),
+        StringLiteral::new("./item", "\"./item\""),
+        Span::new(0, 38),
+    );
+    if let Some(ImportClause::Default { default_name, named }) = &def_import.clause {
+        assert_eq!(default_name.as_str(), "Item");
+        assert_eq!(named.len(), 1);
+    } else {
+        panic!("expected ImportClause::Default");
+    }
+
+    // import "./side_effect";
+    let side_effect = ImportStmt::side_effect(StringLiteral::new("./side_effect", "\"./side_effect\""), Span::new(0, 23));
+    assert!(side_effect.clause.is_none());
+}
+
+#[test]
+fn test_export_statements() {
+    // export struct Point { ... }
+    let struct_decl = Decl::struct_decl(StructDecl::new(
+        Vec::new(),
+        Ident::new("Point", Span::new(14, 19)),
+        None,
+        Vec::new(),
+        Span::new(7, 24),
+    ));
+    let export_decl = ExportStmt::decl(Vec::new(), struct_decl, Span::new(0, 24));
+    if let ExportKind::Decl(d) = &export_decl.kind {
+        if let DeclKind::Struct(s) = &d.kind {
+            assert_eq!(s.name.as_str(), "Point");
+        } else {
+            panic!("expected DeclKind::Struct");
+        }
+    } else {
+        panic!("expected ExportKind::Decl");
+    }
+
+    // export { Foo, Bar as Baz } from "./module";
+    let re_export = ExportStmt::named(
+        vec![
+            ExportSpecifier::simple(Ident::new("Foo", Span::new(9, 12))),
+            ExportSpecifier::new(
+                Ident::new("Bar", Span::new(14, 17)),
+                Some(Ident::new("Baz", Span::new(21, 24))),
+                Span::new(14, 24),
+            ),
+        ],
+        Some(StringLiteral::new("./module", "\"./module\"")),
+        Span::new(0, 42),
+    );
+    if let ExportKind::Named { specifiers, source } = &re_export.kind {
+        assert_eq!(specifiers.len(), 2);
+        assert!(source.is_some());
+    } else {
+        panic!("expected ExportKind::Named");
+    }
+
+    // export default 42;
+    let export_default = ExportStmt::default_expr(
+        Expr::literal(Literal::integer("42", 42, Radix::Decimal, Span::new(15, 17))),
+        Span::new(0, 18),
+    );
+    if let ExportKind::Default(e) = &export_default.kind {
+        assert_eq!(e.span, Span::new(15, 17));
+    } else {
+        panic!("expected ExportKind::Default");
+    }
+}
+
+#[test]
+fn test_program_root() {
+    // Build a mock module:
+    // import { add } from "./math";
+    // export function run(): int { return add(1, 2); }
+    let import_elem = SourceElement::Import(ImportStmt::new(
+        Some(ImportClause::Named(vec![ImportSpecifier::simple(Ident::new("add", Span::new(9, 12)))])),
+        StringLiteral::new("./math", "\"./math\""),
+        Span::new(0, 31),
+    ));
+
+    let ret_stmt = Stmt::return_stmt(
+        Some(Expr::call(
+            Expr::ident(Ident::new("add", Span::new(60, 63))),
+            None,
+            vec![
+                Argument::normal(Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(64, 65)))),
+                Argument::normal(Expr::literal(Literal::integer("2", 2, Radix::Decimal, Span::new(67, 68)))),
+            ],
+            Span::new(60, 69),
+        )),
+        Span::new(53, 70),
+    );
+    let fn_decl = Decl::function(FunctionDecl::new(
+        Vec::new(),
+        false,
+        Ident::new("run", Span::new(48, 51)),
+        None,
+        ParameterList::empty(Span::new(51, 53)),
+        Some(ReturnType::Type(Type::predefined(PredefinedType::Int, Span::new(55, 58)))),
+        Some(Block::new(vec![ret_stmt], Span::new(52, 72))),
+        Span::new(40, 72),
+    ));
+    let export_elem = SourceElement::Export(ExportStmt::decl(Vec::new(), fn_decl, Span::new(33, 72)));
+
+    let program = Program::new(vec![import_elem, export_elem], Span::new(0, 72));
+    assert_eq!(program.elements.len(), 2);
+    assert_eq!(program.elements[0].span(), Span::new(0, 31));
+    assert_eq!(program.elements[1].span(), Span::new(33, 72));
 }
