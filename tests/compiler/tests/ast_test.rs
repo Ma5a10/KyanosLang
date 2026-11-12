@@ -7,14 +7,20 @@
 //! Unified tests for Kyanos AST nodes and data structures.
 
 use kyanos_ast::{
-    AnonymousStructField, Argument, ArrayElement, ArraySize, ArrowBody, AssignOp, Associativity,
-    BinaryOp, BindingTarget, Block, Expr, ExprKind, ForInit, ForIterationKind, ForStmt,
-    FunctionParam, FunctionType, FunctionTypeParam, Ident, Literal, MemberProperty, ObjectMember,
-    ObjectPatternProp, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
-    PrivateIdent, PropertyName, Radix, ReturnType, SizeofTarget, Span, Stmt, StmtKind,
-    StructFieldInit, StructFieldPattern, SwitchCase, SwitchExprArm, TemplateStringPart,
-    TuplePatternElement, Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters,
-    TypePredicate, TypeReference, VarModifier, VariableDecl,
+    Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement, ArraySize,
+    ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, BinaryOp, BindingTarget, Block,
+    ClassDecl, ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl,
+    DeclKind, EnumDecl, EnumVariant, Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl,
+    ExternMember, ExternParameterList, ForInit, ForIterationKind, ForStmt, FunctionDecl,
+    FunctionParam, FunctionType, FunctionTypeParam, GetterSetterDecl, Ident, IndexSignature,
+    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, Literal, MemberProperty,
+    MethodDecl, ObjectMember, ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind,
+    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, PropertyName, Radix,
+    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, Span, Stmt, StmtKind, StringLiteral,
+    StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember, SwitchCase,
+    SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments,
+    TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
+    VariableDecl,
 };
 
 // =============================================================================
@@ -1004,4 +1010,347 @@ fn test_switch_and_jump_statements() {
     assert_eq!(ret.span, Span::new(0, 11));
     assert_eq!(brk.span, Span::new(0, 16));
     assert_eq!(cont.span, Span::new(0, 9));
+}
+
+// =============================================================================
+// Declaration Tests
+// =============================================================================
+
+#[test]
+fn test_function_and_struct_declarations() {
+    // #[inline] async function fetch<T>(url: string, ...headers: string[]): Promise<T> { ... }
+    let attr = Attribute::simple(Ident::new("inline", Span::new(2, 8)), Span::new(0, 9));
+    let param1 = Parameter::simple(
+        Ident::new("url", Span::new(26, 29)),
+        Some(Type::predefined(PredefinedType::String, Span::new(31, 37))),
+        Span::new(26, 37),
+    );
+    let rest = RestParameter::new(
+        Ident::new("headers", Span::new(42, 49)),
+        Some(Type::dynamic_array(
+            Type::predefined(PredefinedType::String, Span::new(51, 57)),
+            Span::new(51, 59),
+        )),
+        Span::new(39, 59),
+    );
+    let params = ParameterList::new(vec![param1], Some(rest), Span::new(25, 60));
+    let t_param = TypeParameter::new(
+        Ident::new("T", Span::new(23, 24)),
+        None,
+        None,
+        Span::new(23, 24),
+    );
+    let type_params = TypeParameters::new(vec![t_param], Span::new(22, 25));
+
+    let fn_decl = FunctionDecl::new(
+        vec![attr],
+        true,
+        Ident::new("fetch", Span::new(16, 21)),
+        Some(type_params),
+        params,
+        Some(ReturnType::Type(Type::reference(
+            TypeName::single(Ident::new("Promise", Span::new(62, 69))),
+            None,
+            Span::new(62, 72),
+        ))),
+        Some(Block::empty(Span::new(73, 75))),
+        Span::new(0, 75),
+    );
+    let decl = Decl::function(fn_decl);
+    if let DeclKind::Function(f) = decl.kind {
+        assert!(f.is_async);
+        assert_eq!(f.attributes.len(), 1);
+        assert_eq!(f.params.params.len(), 1);
+        assert!(f.params.rest.is_some());
+    } else {
+        panic!("expected DeclKind::Function");
+    }
+
+    // #[repr(C)] struct Point { public readonly x: int; public constructor(x: int) { ... } }
+    let repr_attr = Attribute::new(
+        Ident::new("repr", Span::new(2, 6)),
+        vec![AttributeArg::new(
+            None,
+            Expr::ident(Ident::new("C", Span::new(7, 8))),
+            Span::new(7, 8),
+        )],
+        Span::new(0, 9),
+    );
+    let field = StructMember::Field(StructField {
+        accessibility: Some(Accessibility::Public),
+        is_static: false,
+        is_readonly: true,
+        name: Ident::new("x", Span::new(28, 29)),
+        ty: Some(Type::predefined(PredefinedType::Int, Span::new(31, 34))),
+        init: None,
+        span: Span::new(12, 35),
+    });
+    let ctor = StructMember::Constructor(ConstructorDecl {
+        accessibility: Some(Accessibility::Public),
+        params: ParameterList::new(
+            vec![Parameter::simple(
+                Ident::new("x", Span::new(56, 57)),
+                Some(Type::predefined(PredefinedType::Int, Span::new(59, 62))),
+                Span::new(56, 62),
+            )],
+            None,
+            Span::new(55, 63),
+        ),
+        body: Block::empty(Span::new(64, 66)),
+        span: Span::new(36, 66),
+    });
+    let method = StructMember::Method(MethodDecl {
+        accessibility: Some(Accessibility::Public),
+        is_static: false,
+        is_async: false,
+        name: Ident::new("getX", Span::new(75, 79)),
+        type_parameters: None,
+        params: ParameterList::empty(Span::new(79, 81)),
+        return_type: Some(ReturnType::Type(Type::predefined(
+            PredefinedType::Int,
+            Span::new(83, 86),
+        ))),
+        body: Block::empty(Span::new(87, 89)),
+        span: Span::new(68, 89),
+    });
+    let struct_decl = StructDecl::new(
+        vec![repr_attr],
+        Ident::new("Point", Span::new(17, 22)),
+        None,
+        vec![field, ctor, method],
+        Span::new(0, 91),
+    );
+    let decl_struct = Decl::struct_decl(struct_decl);
+    if let DeclKind::Struct(s) = decl_struct.kind {
+        assert_eq!(s.name.as_str(), "Point");
+        assert_eq!(s.members.len(), 3);
+    } else {
+        panic!("expected DeclKind::Struct");
+    }
+}
+
+#[test]
+fn test_class_and_interface_declarations() {
+    // class Node extends Base implements Disposable { private #id: int; get id(): int { ... } }
+    let field = ClassMember::Field(ClassField {
+        accessibility: Some(Accessibility::Private),
+        is_static: false,
+        is_readonly: false,
+        name: ClassElementName::Private(PrivateIdent::new("#id", Span::new(57, 60))),
+        ty: Some(Type::predefined(PredefinedType::Int, Span::new(62, 65))),
+        init: None,
+        span: Span::new(49, 66),
+    });
+    let getter = ClassMember::GetterSetter(GetterSetterDecl {
+        accessibility: Some(Accessibility::Public),
+        is_static: false,
+        kind: AccessorKind::Get,
+        name: ClassElementName::Ident(Ident::new("id", Span::new(76, 78))),
+        params: ParameterList::empty(Span::new(78, 80)),
+        return_type: Some(Type::predefined(PredefinedType::Int, Span::new(82, 85))),
+        body: Block::empty(Span::new(86, 88)),
+        span: Span::new(67, 88),
+    });
+    let method = ClassMember::Method(ClassMethod {
+        accessibility: Some(Accessibility::Public),
+        is_static: false,
+        is_async: false,
+        name: ClassElementName::Ident(Ident::new("dispose", Span::new(96, 103))),
+        type_parameters: None,
+        params: ParameterList::empty(Span::new(103, 105)),
+        return_type: Some(ReturnType::Type(Type::predefined(
+            PredefinedType::Void,
+            Span::new(107, 111),
+        ))),
+        body: Block::empty(Span::new(112, 114)),
+        span: Span::new(89, 114),
+    });
+    let class_decl = ClassDecl::new(
+        Vec::new(),
+        ClassElementName::Ident(Ident::new("Node", Span::new(6, 10))),
+        None,
+        Some(TypeReference::new(
+            TypeName::single(Ident::new("Base", Span::new(19, 23))),
+            None,
+            Span::new(19, 23),
+        )),
+        vec![TypeReference::new(
+            TypeName::single(Ident::new("Disposable", Span::new(35, 45))),
+            None,
+            Span::new(35, 45),
+        )],
+        vec![field, getter, method],
+        Span::new(0, 116),
+    );
+    let decl_class = Decl::class_decl(class_decl);
+    if let DeclKind::Class(c) = decl_class.kind {
+        assert!(c.extends.is_some());
+        assert_eq!(c.implements.len(), 1);
+        assert_eq!(c.members.len(), 3);
+    } else {
+        panic!("expected DeclKind::Class");
+    }
+
+    // interface Collection { readonly count: int; [key: string]: int; clear(): void; }
+    let iface_prop = InterfaceMember::Property(InterfaceProperty {
+        is_readonly: true,
+        name: Ident::new("count", Span::new(32, 37)),
+        is_optional: false,
+        ty: Type::predefined(PredefinedType::Int, Span::new(39, 42)),
+        span: Span::new(23, 43),
+    });
+    let iface_index = InterfaceMember::Index(IndexSignature {
+        name: Ident::new("key", Span::new(45, 48)),
+        key_type: PredefinedType::String,
+        value_type: Type::predefined(PredefinedType::Int, Span::new(58, 61)),
+        span: Span::new(44, 62),
+    });
+    let iface_method = InterfaceMember::Method(InterfaceMethod {
+        name: Ident::new("clear", Span::new(64, 69)),
+        is_optional: false,
+        type_parameters: None,
+        params: ParameterList::empty(Span::new(69, 71)),
+        return_type: ReturnType::Type(Type::predefined(PredefinedType::Void, Span::new(73, 77))),
+        span: Span::new(64, 78),
+    });
+    let iface_decl = InterfaceDecl::new(
+        Ident::new("Collection", Span::new(10, 20)),
+        None,
+        Vec::new(),
+        vec![iface_prop, iface_index, iface_method],
+        Span::new(0, 80),
+    );
+    let decl_iface = Decl::interface_decl(iface_decl);
+    if let DeclKind::Interface(i) = decl_iface.kind {
+        assert_eq!(i.name.as_str(), "Collection");
+        assert_eq!(i.members.len(), 3);
+    } else {
+        panic!("expected DeclKind::Interface");
+    }
+}
+
+#[test]
+fn test_enum_type_alias_and_ffi_declarations() {
+    // enum Event { KeyPress(char), Quit = 0 }
+    let v1 = EnumVariant::Tuple {
+        name: Ident::new("KeyPress", Span::new(13, 21)),
+        payload: ParameterList::new(
+            vec![Parameter::simple(
+                Ident::new("ch", Span::new(22, 24)),
+                Some(Type::predefined(PredefinedType::Char, Span::new(26, 30))),
+                Span::new(22, 30),
+            )],
+            None,
+            Span::new(21, 31),
+        ),
+        span: Span::new(13, 31),
+    };
+    let v2 = EnumVariant::Value {
+        name: Ident::new("Quit", Span::new(33, 37)),
+        value: Some(Expr::literal(Literal::integer(
+            "0",
+            0,
+            Radix::Decimal,
+            Span::new(40, 41),
+        ))),
+        span: Span::new(33, 41),
+    };
+    let enum_decl = EnumDecl::new(
+        Vec::new(),
+        Ident::new("Event", Span::new(5, 10)),
+        None,
+        None,
+        vec![v1, v2],
+        Span::new(0, 43),
+    );
+    let decl_enum = Decl::enum_decl(enum_decl);
+    if let DeclKind::Enum(e) = decl_enum.kind {
+        assert_eq!(e.name.as_str(), "Event");
+        assert_eq!(e.variants.len(), 2);
+    } else {
+        panic!("expected DeclKind::Enum");
+    }
+
+    // type Handler<T> = (event: T) => void;
+    let type_alias = TypeAliasDecl::new(
+        Vec::new(),
+        Ident::new("Handler", Span::new(5, 12)),
+        Some(TypeParameters::new(
+            vec![TypeParameter::new(
+                Ident::new("T", Span::new(13, 14)),
+                None,
+                None,
+                Span::new(13, 14),
+            )],
+            Span::new(12, 15),
+        )),
+        Type::predefined(PredefinedType::Void, Span::new(33, 37)),
+        Span::new(0, 38),
+    );
+    let decl_alias = Decl::type_alias(type_alias);
+    if let DeclKind::TypeAlias(t) = decl_alias.kind {
+        assert_eq!(t.name.as_str(), "Handler");
+    } else {
+        panic!("expected DeclKind::TypeAlias");
+    }
+
+    // extern "C" { function puts(s: rawptr): int; }
+    let extern_func = ExternMember::Function(ExternFunctionDecl {
+        attributes: Vec::new(),
+        name: Ident::new("puts", Span::new(24, 28)),
+        type_parameters: None,
+        params: ExternParameterList::new(
+            vec![Parameter::simple(
+                Ident::new("s", Span::new(29, 30)),
+                Some(Type::predefined(PredefinedType::Rawptr, Span::new(32, 38))),
+                Span::new(29, 38),
+            )],
+            false,
+            None,
+            Span::new(28, 39),
+        ),
+        return_type: Some(Type::predefined(PredefinedType::Int, Span::new(41, 44))),
+        span: Span::new(15, 45),
+    });
+    let extern_block = ExternBlockDecl::new(
+        Vec::new(),
+        StringLiteral::new("C", "\"C\""),
+        vec![extern_func],
+        Span::new(0, 47),
+    );
+    let decl_extern = Decl::extern_block(extern_block);
+    if let DeclKind::ExternBlock(eb) = decl_extern.kind {
+        assert_eq!(eb.abi.value, "C");
+        assert_eq!(eb.members.len(), 1);
+    } else {
+        panic!("expected DeclKind::ExternBlock");
+    }
+
+    // extern "C" function printf(fmt: rawptr, ...): int;
+    let single_extern = SingleExternDecl::new(
+        Vec::new(),
+        StringLiteral::new("C", "\"C\""),
+        Ident::new("printf", Span::new(20, 26)),
+        None,
+        ExternParameterList::new(
+            vec![Parameter::simple(
+                Ident::new("fmt", Span::new(27, 30)),
+                Some(Type::predefined(PredefinedType::Rawptr, Span::new(32, 38))),
+                Span::new(27, 38),
+            )],
+            true,
+            None,
+            Span::new(26, 43),
+        ),
+        Some(Type::predefined(PredefinedType::Int, Span::new(46, 49))),
+        None,
+        Span::new(0, 50),
+    );
+    let decl_single_extern = Decl::single_extern(single_extern);
+    if let DeclKind::SingleExtern(se) = decl_single_extern.kind {
+        assert!(se.params.is_variadic);
+        assert_eq!(se.name.as_str(), "printf");
+    } else {
+        panic!("expected DeclKind::SingleExtern");
+    }
 }

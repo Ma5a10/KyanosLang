@@ -6,6 +6,7 @@
 
 //! AST (Abstract Syntax Tree) definitions for the Kyanos programming language.
 
+pub mod decl;
 pub mod expr;
 pub mod ident;
 pub mod literal;
@@ -13,6 +14,15 @@ pub mod op;
 pub mod pattern;
 pub mod stmt;
 pub mod types;
+
+pub use decl::{
+    Accessibility, AccessorKind, Attribute, AttributeArg, ClassDecl, ClassElementName, ClassField,
+    ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant,
+    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ExternVariableDecl,
+    FunctionDecl, GetterSetterDecl, IndexSignature, InterfaceDecl, InterfaceMember,
+    InterfaceMethod, InterfaceProperty, MethodDecl, Parameter, ParameterList, RestParameter,
+    SingleExternDecl, StructDecl, StructField, StructMember, TypeAliasDecl,
+};
 
 pub use expr::{
     Argument, ArrayElement, ArrowBody, Expr, ExprKind, FunctionParam, MemberProperty, ObjectMember,
