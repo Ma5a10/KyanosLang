@@ -25,9 +25,14 @@ pub use literal::{
 };
 pub use op::{AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
 pub use pattern::{
-    ObjectPatternProp, Pattern, PatternKind, StructFieldPattern, TuplePatternElement,
+    BindingTarget, LiteralPattern, ObjectPatternProp, Pattern, PatternKind, StructFieldPattern,
+    TuplePatternElement, VarModifier,
 };
-pub use stmt::{Block, Stmt, StmtKind};
+pub use stmt::{
+    Block, BreakStmt, ContinueStmt, DeferStmt, DoWhileStmt, ForInit, ForIterationKind, ForStmt,
+    IfStmt, ReturnStmt, Stmt, StmtKind, SwitchCase, SwitchStmt, UnsafeStmt, UsingStmt,
+    VariableDecl, VariableStmt, WhileStmt,
+};
 pub use types::{
     AnonymousStructField, ArraySize, FunctionType, FunctionTypeParam, PredefinedType, ReturnType,
     Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate,

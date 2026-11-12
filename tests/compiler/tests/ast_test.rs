@@ -8,11 +8,13 @@
 
 use kyanos_ast::{
     AnonymousStructField, Argument, ArrayElement, ArraySize, ArrowBody, AssignOp, Associativity,
-    BinaryOp, Block, Expr, ExprKind, FunctionParam, FunctionType, FunctionTypeParam, Ident,
-    Literal, MemberProperty, ObjectMember, Pattern, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
-    PrivateIdent, PropertyName, Radix, ReturnType, SizeofTarget, Span, StructFieldInit,
-    SwitchExprArm, TemplateStringPart, Type, TypeArguments, TypeKind, TypeName, TypeParameter,
-    TypeParameters, TypePredicate, TypeReference,
+    BinaryOp, BindingTarget, Block, Expr, ExprKind, ForInit, ForIterationKind, ForStmt,
+    FunctionParam, FunctionType, FunctionTypeParam, Ident, Literal, MemberProperty, ObjectMember,
+    ObjectPatternProp, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    PrivateIdent, PropertyName, Radix, ReturnType, SizeofTarget, Span, Stmt, StmtKind,
+    StructFieldInit, StructFieldPattern, SwitchCase, SwitchExprArm, TemplateStringPart,
+    TuplePatternElement, Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters,
+    TypePredicate, TypeReference, VarModifier, VariableDecl,
 };
 
 // =============================================================================
@@ -613,4 +615,393 @@ fn test_control_and_functional_expressions() {
     } else {
         panic!("expected ExprKind::TemplateString");
     }
+}
+
+// =============================================================================
+// Pattern Tests
+// =============================================================================
+
+#[test]
+fn test_patterns() {
+    // Wildcard: _
+    let wildcard = Pattern::wildcard(Span::new(0, 1));
+    assert_eq!(wildcard.kind, PatternKind::Wildcard);
+
+    // Literal Pattern: -42
+    let signed_lit = Pattern::signed_literal(
+        PrefixUnaryOp::Minus,
+        Literal::integer("42", 42, Radix::Decimal, Span::new(1, 3)),
+        Span::new(0, 3),
+    );
+    if let PatternKind::Literal(lit_pat) = signed_lit.kind {
+        assert_eq!(lit_pat.sign, Some(PrefixUnaryOp::Minus));
+    } else {
+        panic!("expected PatternKind::Literal");
+    }
+
+    // Var Pattern: let x
+    let var_pat = Pattern::var(
+        Ident::new("x", Span::new(4, 5)),
+        Some(VarModifier::Let),
+        Span::new(0, 5),
+    );
+    if let PatternKind::Var { modifier, name } = var_pat.kind {
+        assert_eq!(modifier, Some(VarModifier::Let));
+        assert_eq!(name.as_str(), "x");
+    } else {
+        panic!("expected PatternKind::Var");
+    }
+
+    // Struct Pattern: Point { x: 0, y: let y, ... }
+    let struct_pat = Pattern::struct_pattern(
+        TypeName::single(Ident::new("Point", Span::new(0, 5))),
+        vec![
+            StructFieldPattern::Field {
+                name: Ident::new("x", Span::new(8, 9)),
+                pattern: Pattern::literal(
+                    Literal::integer("0", 0, Radix::Decimal, Span::new(11, 12)),
+                    Span::new(11, 12),
+                ),
+                span: Span::new(8, 12),
+            },
+            StructFieldPattern::Binding {
+                modifier: Some(VarModifier::Let),
+                name: Ident::new("y", Span::new(18, 19)),
+                span: Span::new(14, 19),
+            },
+            StructFieldPattern::Rest(Span::new(21, 24)),
+        ],
+        Span::new(0, 26),
+    );
+    if let PatternKind::Struct {
+        struct_name,
+        fields,
+    } = struct_pat.kind
+    {
+        assert_eq!(struct_name.to_string(), "Point");
+        assert_eq!(fields.len(), 3);
+    } else {
+        panic!("expected PatternKind::Struct");
+    }
+
+    // Variant Pattern: Option::Some(let val)
+    let variant_pat = Pattern::variant(
+        TypeName::new(
+            vec![
+                Ident::new("Option", Span::new(0, 6)),
+                Ident::new("Some", Span::new(8, 12)),
+            ],
+            Span::new(0, 12),
+        ),
+        vec![Pattern::var(
+            Ident::new("val", Span::new(17, 20)),
+            Some(VarModifier::Let),
+            Span::new(13, 20),
+        )],
+        Span::new(0, 21),
+    );
+    if let PatternKind::Variant {
+        variant_name,
+        payload,
+    } = variant_pat.kind
+    {
+        assert_eq!(variant_name.to_string(), "Option.Some");
+        assert_eq!(payload.len(), 1);
+    } else {
+        panic!("expected PatternKind::Variant");
+    }
+
+    // Tuple Pattern: [head, ...tail]
+    let tuple_pat = Pattern::tuple(
+        vec![
+            TuplePatternElement::normal(Pattern::var(
+                Ident::new("head", Span::new(1, 5)),
+                None,
+                Span::new(1, 5),
+            )),
+            TuplePatternElement::rest(
+                Pattern::var(
+                    Ident::new("tail", Span::new(10, 14)),
+                    None,
+                    Span::new(10, 14),
+                ),
+                Span::new(7, 14),
+            ),
+        ],
+        Span::new(0, 15),
+    );
+    if let PatternKind::Tuple(elements) = tuple_pat.kind {
+        assert_eq!(elements.len(), 2);
+        assert!(elements[1].is_rest);
+    } else {
+        panic!("expected PatternKind::Tuple");
+    }
+
+    // Object Pattern: { x, y: target = 10, ...rest }
+    let obj_target = BindingTarget::Object(vec![
+        ObjectPatternProp::Property {
+            name: Ident::new("x", Span::new(2, 3)),
+            target: None,
+            default: None,
+            span: Span::new(2, 3),
+        },
+        ObjectPatternProp::Property {
+            name: Ident::new("y", Span::new(5, 6)),
+            target: Some(BindingTarget::Ident(Ident::new("target", Span::new(8, 14)))),
+            default: Some(Box::new(Expr::literal(Literal::integer(
+                "10",
+                10,
+                Radix::Decimal,
+                Span::new(17, 19),
+            )))),
+            span: Span::new(5, 19),
+        },
+        ObjectPatternProp::Rest {
+            target: Ident::new("rest", Span::new(24, 28)),
+            span: Span::new(21, 28),
+        },
+    ]);
+    assert_eq!(obj_target.span(), Span::new(2, 28));
+}
+
+// =============================================================================
+// Statement Tests
+// =============================================================================
+
+#[test]
+fn test_variable_and_resource_statements() {
+    // let x: int = 10, y = 20;
+    let decl1 = VariableDecl::new(
+        BindingTarget::Ident(Ident::new("x", Span::new(4, 5))),
+        Some(Type::predefined(PredefinedType::Int, Span::new(7, 10))),
+        Some(Expr::literal(Literal::integer(
+            "10",
+            10,
+            Radix::Decimal,
+            Span::new(13, 15),
+        ))),
+        Span::new(4, 15),
+    );
+    let decl2 = VariableDecl::new(
+        BindingTarget::Ident(Ident::new("y", Span::new(17, 18))),
+        None,
+        Some(Expr::literal(Literal::integer(
+            "20",
+            20,
+            Radix::Decimal,
+            Span::new(21, 23),
+        ))),
+        Span::new(17, 23),
+    );
+    let let_stmt = Stmt::variable(VarModifier::Let, vec![decl1, decl2], Span::new(0, 24));
+    if let StmtKind::Variable(var_stmt) = let_stmt.kind {
+        assert_eq!(var_stmt.modifier, VarModifier::Let);
+        assert_eq!(var_stmt.declarations.len(), 2);
+    } else {
+        panic!("expected StmtKind::Variable");
+    }
+
+    // const [a, b] = tuple;
+    let tuple_target = BindingTarget::Tuple(vec![
+        TuplePatternElement::normal(Pattern::var(
+            Ident::new("a", Span::new(7, 8)),
+            None,
+            Span::new(7, 8),
+        )),
+        TuplePatternElement::normal(Pattern::var(
+            Ident::new("b", Span::new(10, 11)),
+            None,
+            Span::new(10, 11),
+        )),
+    ]);
+    let const_destruct = Stmt::variable(
+        VarModifier::Const,
+        vec![VariableDecl::new(
+            tuple_target,
+            None,
+            Some(Expr::ident(Ident::new("tuple", Span::new(16, 21)))),
+            Span::new(6, 21),
+        )],
+        Span::new(0, 22),
+    );
+    if let StmtKind::Variable(var_stmt) = const_destruct.kind {
+        assert_eq!(var_stmt.modifier, VarModifier::Const);
+    } else {
+        panic!("expected StmtKind::Variable");
+    }
+
+    // using file = openFile();
+    let using_stmt = Stmt::using_stmt(
+        Ident::new("file", Span::new(6, 10)),
+        None,
+        Expr::call(
+            Expr::ident(Ident::new("openFile", Span::new(13, 21))),
+            None,
+            Vec::new(),
+            Span::new(13, 23),
+        ),
+        Span::new(0, 24),
+    );
+    if let StmtKind::Using(u) = using_stmt.kind {
+        assert_eq!(u.name.as_str(), "file");
+    } else {
+        panic!("expected StmtKind::Using");
+    }
+}
+
+#[test]
+fn test_control_flow_statements() {
+    let cond = Expr::ident(Ident::new("condition", Span::new(4, 13)));
+    let body = Stmt::block(Block::empty(Span::new(15, 17)));
+
+    // if (cond) { ... } else { ... }
+    let else_body = Stmt::block(Block::empty(Span::new(23, 25)));
+    let if_stmt = Stmt::if_stmt(
+        cond.clone(),
+        body.clone(),
+        Some(else_body),
+        Span::new(0, 25),
+    );
+    if let StmtKind::If(i) = if_stmt.kind {
+        assert!(i.else_branch.is_some());
+    } else {
+        panic!("expected StmtKind::If");
+    }
+
+    // while (cond) { ... }
+    let while_stmt = Stmt::while_stmt(cond.clone(), body.clone(), Span::new(0, 17));
+    if let StmtKind::While(w) = while_stmt.kind {
+        assert_eq!(w.condition, cond);
+    } else {
+        panic!("expected StmtKind::While");
+    }
+
+    // do { ... } while (cond);
+    let do_while = Stmt::do_while(body.clone(), cond.clone(), Span::new(0, 25));
+    if let StmtKind::DoWhile(dw) = do_while.kind {
+        assert_eq!(dw.condition, cond);
+    } else {
+        panic!("expected StmtKind::DoWhile");
+    }
+
+    // Standard for: for (let i = 0; i < 10; i += 1) { ... }
+    let for_init = ForInit::Let(vec![VariableDecl::new(
+        BindingTarget::Ident(Ident::new("i", Span::new(9, 10))),
+        None,
+        Some(Expr::literal(Literal::integer(
+            "0",
+            0,
+            Radix::Decimal,
+            Span::new(13, 14),
+        ))),
+        Span::new(9, 14),
+    )]);
+    let for_stmt = Stmt::for_standard(
+        Some(for_init),
+        Some(Expr::binary(
+            BinaryOp::Lt,
+            Expr::ident(Ident::new("i", Span::new(16, 17))),
+            Expr::literal(Literal::integer(
+                "10",
+                10,
+                Radix::Decimal,
+                Span::new(20, 22),
+            )),
+        )),
+        Some(vec![Expr::assign(
+            AssignOp::AddAssign,
+            Expr::ident(Ident::new("i", Span::new(24, 25))),
+            Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(29, 30))),
+        )]),
+        body.clone(),
+        Span::new(0, 35),
+    );
+    if let StmtKind::For(ForStmt::Standard {
+        init, test, update, ..
+    }) = for_stmt.kind
+    {
+        assert!(init.is_some());
+        assert!(test.is_some());
+        assert_eq!(update.unwrap().len(), 1);
+    } else {
+        panic!("expected Standard ForStmt");
+    }
+
+    // for (let item of array) { ... }
+    let for_of = Stmt::for_iteration(
+        VarModifier::Let,
+        BindingTarget::Ident(Ident::new("item", Span::new(9, 13))),
+        ForIterationKind::Of,
+        Expr::ident(Ident::new("array", Span::new(17, 22))),
+        body.clone(),
+        Span::new(0, 27),
+    );
+    if let StmtKind::For(ForStmt::Iteration { kind, modifier, .. }) = for_of.kind {
+        assert_eq!(kind, ForIterationKind::Of);
+        assert_eq!(modifier, VarModifier::Let);
+    } else {
+        panic!("expected Iteration ForStmt");
+    }
+}
+
+#[test]
+fn test_switch_and_jump_statements() {
+    // switch (val) { case 1: ... default: ... }
+    let switch_target = Expr::ident(Ident::new("val", Span::new(8, 11)));
+    let cases = vec![
+        SwitchCase::Case {
+            pattern: Pattern::literal(
+                Literal::integer("1", 1, Radix::Decimal, Span::new(18, 19)),
+                Span::new(18, 19),
+            ),
+            guard: None,
+            body: vec![Stmt::break_stmt(None, Span::new(21, 27))],
+            span: Span::new(13, 27),
+        },
+        SwitchCase::Default {
+            body: vec![Stmt::return_stmt(None, Span::new(38, 45))],
+            span: Span::new(29, 45),
+        },
+    ];
+    let switch_stmt = Stmt::switch_stmt(switch_target, cases, Span::new(0, 48));
+    if let StmtKind::Switch(s) = switch_stmt.kind {
+        assert_eq!(s.cases.len(), 2);
+    } else {
+        panic!("expected StmtKind::Switch");
+    }
+
+    // Defer statement: defer cleanup();
+    let defer_stmt = Stmt::defer_stmt(
+        Stmt::expr(Expr::call(
+            Expr::ident(Ident::new("cleanup", Span::new(6, 13))),
+            None,
+            Vec::new(),
+            Span::new(6, 15),
+        )),
+        Span::new(0, 16),
+    );
+    if let StmtKind::Defer(d) = defer_stmt.kind {
+        assert_eq!(d.span, Span::new(0, 16));
+    } else {
+        panic!("expected StmtKind::Defer");
+    }
+
+    // Unsafe statement: unsafe { ... }
+    let unsafe_stmt = Stmt::unsafe_stmt(Block::empty(Span::new(7, 9)), Span::new(0, 9));
+    assert_eq!(unsafe_stmt.span, Span::new(0, 9));
+
+    // Jump statements: return, break, continue
+    let ret = Stmt::return_stmt(
+        Some(Expr::ident(Ident::new("res", Span::new(7, 10)))),
+        Span::new(0, 11),
+    );
+    let brk = Stmt::break_stmt(
+        Some(Ident::new("loopLabel", Span::new(6, 15))),
+        Span::new(0, 16),
+    );
+    let cont = Stmt::continue_stmt(None, Span::new(0, 9));
+
+    assert_eq!(ret.span, Span::new(0, 11));
+    assert_eq!(brk.span, Span::new(0, 16));
+    assert_eq!(cont.span, Span::new(0, 9));
 }
