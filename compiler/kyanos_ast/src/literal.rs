@@ -84,13 +84,16 @@ pub struct StringLiteral {
     pub value: String,
     /// Raw representation in source code (including quotes).
     pub raw: String,
+    /// Source span of the string literal.
+    pub span: Span,
 }
 
 impl StringLiteral {
-    pub fn new(value: impl Into<String>, raw: impl Into<String>) -> Self {
+    pub fn new(value: impl Into<String>, raw: impl Into<String>, span: Span) -> Self {
         Self {
             value: value.into(),
             raw: raw.into(),
+            span,
         }
     }
 }
@@ -110,6 +113,11 @@ impl CStringLiteral {
             value: value.into(),
             raw: raw.into(),
         }
+    }
+
+    /// Returns `true` if the unescaped C-string contains an interior NUL (`\0`) byte.
+    pub fn has_interior_nul(&self) -> bool {
+        self.value.as_bytes().contains(&0)
     }
 }
 
@@ -134,6 +142,7 @@ impl CharLiteral {
 /// The specific kind of literal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiteralKind {
+    Unit,
     Integer(IntegerLiteral),
     Float(FloatLiteral),
     BigInt(BigIntLiteral),
@@ -156,8 +165,15 @@ impl Literal {
         Self { kind, span }
     }
 
+    pub fn unit(span: Span) -> Self {
+        Self::new(LiteralKind::Unit, span)
+    }
+
     pub fn integer(raw: impl Into<String>, value: u64, radix: Radix, span: Span) -> Self {
-        Self::new(LiteralKind::Integer(IntegerLiteral::new(raw, value, radix)), span)
+        Self::new(
+            LiteralKind::Integer(IntegerLiteral::new(raw, value, radix)),
+            span,
+        )
     }
 
     pub fn float(raw: impl Into<String>, value: f64, span: Span) -> Self {
@@ -169,7 +185,10 @@ impl Literal {
     }
 
     pub fn string(value: impl Into<String>, raw: impl Into<String>, span: Span) -> Self {
-        Self::new(LiteralKind::String(StringLiteral::new(value, raw)), span)
+        Self::new(
+            LiteralKind::String(StringLiteral::new(value, raw, span)),
+            span,
+        )
     }
 
     pub fn c_string(value: impl Into<String>, raw: impl Into<String>, span: Span) -> Self {
@@ -192,6 +211,7 @@ impl Literal {
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
+            LiteralKind::Unit => write!(f, "()"),
             LiteralKind::Integer(lit) => write!(f, "{}", lit.raw),
             LiteralKind::Float(lit) => write!(f, "{}", lit.raw),
             LiteralKind::BigInt(lit) => write!(f, "{}", lit.raw),

@@ -88,6 +88,7 @@ declaration:
 	| classDeclaration
 	| interfaceDeclaration
 	| enumDeclaration
+	| typeAliasDeclaration
 	| externBlock
 	| singleExternDeclaration;
 
@@ -298,6 +299,12 @@ enumVariant:
 	| Identifier (Assign singleExpression)?; // Simple numeric/unit variant, e.g. PageLoad, Ok = 200
 
 // =============================================================================
+// Type Alias Declaration
+// =============================================================================
+typeAliasDeclaration:
+	attribute* Type Identifier typeParameters? Assign type_ eos;
+
+// =============================================================================
 // C-FFI (Foreign Function Interface) & Attributes
 // =============================================================================
 // Design Principles (design.md Section 5.4 & design_ffi.md):
@@ -476,11 +483,12 @@ statement:
 	| continueStatement
 	| deferStatement
 	| unsafeStatement
+	| labeledStatement
 	| debuggerStatement
 	| expressionStatement
 	| emptyStatement;
 
-block: OpenBrace statement* CloseBrace;
+block: OpenBrace (declaration | statement)* CloseBrace;
 
 ifStatement:
 	If OpenParen singleExpression CloseParen statement (
@@ -531,6 +539,8 @@ deferStatement: Defer statement;
 // 'unsafe' Statement: Encloses low-level raw pointer dereferencing and unchecked FFI calls.
 unsafeStatement: Unsafe block;
 
+labeledStatement: Identifier Colon statement;
+
 debuggerStatement: Debugger eos;
 
 expressionStatement: singleExpression eos;
@@ -552,6 +562,7 @@ pattern:
 	| structPattern
 	| variantPattern
 	| tuplePattern
+	| objectPattern
 	| wildcardPattern
 	| varPattern;
 
@@ -644,8 +655,8 @@ singleExpression:
 	// Member Indexing: arr[i], dict["key"], optArr?.[i]
 	| singleExpression OptionalChain? OpenBracket expressionSequence CloseBracket #
 		MemberIndexExpression
-	// Optional Chaining: obj?.prop
-	| singleExpression OptionalChain Identifier													# OptionalChainExpression
+	// Optional Chaining: obj?.prop, obj?.#privateProp
+	| singleExpression OptionalChain classElementName											# OptionalChainExpression
 	// Member Dot Access: obj.prop, obj.#privateProp
 	| singleExpression Dot classElementName														# MemberDotExpression
 	// Function Call: f(x, y)

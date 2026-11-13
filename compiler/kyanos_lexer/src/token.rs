@@ -42,6 +42,7 @@ pub enum TokenKind {
     Struct,
     Interface,
     Enum,
+    Type,
     Constructor,
 
     If,
@@ -225,6 +226,7 @@ impl TokenKind {
                 | Self::Struct
                 | Self::Interface
                 | Self::Enum
+                | Self::Type
                 | Self::Constructor
                 | Self::If
                 | Self::Else
@@ -350,6 +352,7 @@ impl TokenKind {
             "struct" => Some(TokenKind::Struct),
             "interface" => Some(TokenKind::Interface),
             "enum" => Some(TokenKind::Enum),
+            "type" => Some(TokenKind::Type),
             "constructor" => Some(TokenKind::Constructor),
             // Control flow
             "if" => Some(TokenKind::If),

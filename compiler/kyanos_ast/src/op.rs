@@ -8,6 +8,42 @@
 
 use std::fmt;
 
+/// Unified Pratt parser operator precedence levels (`1..=17`, higher binds tighter)
+/// and binding powers matching `design/grammer/kyanos_syntax_grammar.g4`.
+pub mod precedence {
+    pub const ASSIGN: u8 = 1;
+    pub const TERNARY: u8 = 2;
+    pub const NULL_COALESCING: u8 = 3;
+    pub const LOGICAL_OR: u8 = 4;
+    pub const LOGICAL_AND: u8 = 5;
+    pub const BIT_OR: u8 = 6;
+    pub const BIT_XOR: u8 = 7;
+    pub const BIT_AND: u8 = 8;
+    pub const EQUALITY: u8 = 9;
+    pub const RELATIONAL: u8 = 10;
+    pub const TYPE_TEST: u8 = RELATIONAL;
+    pub const SHIFT: u8 = 11;
+    pub const ADDITIVE: u8 = 12;
+    pub const MULTIPLICATIVE: u8 = 13;
+    pub const POWER: u8 = 14;
+    pub const CAST: u8 = 15;
+    pub const PREFIX: u8 = 16;
+    pub const POSTFIX: u8 = 17;
+
+    /// Assignment binding power `(left_bp, right_bp)`, right-associative.
+    pub const ASSIGN_BP: (u8, u8) = (ASSIGN * 2 + 1, ASSIGN * 2);
+    /// Ternary (`? :`) binding power `(left_bp, right_bp)`, right-associative.
+    pub const TERNARY_BP: (u8, u8) = (TERNARY * 2 + 1, TERNARY * 2);
+    /// Type test (`expr is Type`) infix binding power `(left_bp, right_bp)`.
+    pub const TYPE_TEST_BP: (u8, u8) = (TYPE_TEST * 2, TYPE_TEST * 2 + 1);
+    /// Type cast (`expr as Type`) left binding power.
+    pub const CAST_LEFT_BP: u8 = CAST * 2;
+    /// Prefix unary / `new` right binding power.
+    pub const PREFIX_RIGHT_BP: u8 = PREFIX * 2 + 1;
+    /// Postfix (`()`, `[]`, `.`, `?.`, `++`, `--`, `!`) left binding power.
+    pub const POSTFIX_LEFT_BP: u8 = POSTFIX * 2 + 1;
+}
+
 /// Associativity of a binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Associativity {
@@ -27,9 +63,9 @@ pub enum BinaryOp {
     Pow, // **
 
     // Bitwise
-    Shl,  // <<
-    Shr,  // >>
-    Ushr, // >>>
+    Shl,    // <<
+    Shr,    // >>
+    Ushr,   // >>>
     BitAnd, // &
     BitXor, // ^
     BitOr,  // |
@@ -41,7 +77,6 @@ pub enum BinaryOp {
     Ge, // >=
     Eq, // ==
     Ne, // !=
-    Is, // is
 
     // Logical
     LogicalAnd,     // &&
@@ -71,7 +106,6 @@ impl BinaryOp {
             Self::Ge => ">=",
             Self::Eq => "==",
             Self::Ne => "!=",
-            Self::Is => "is",
             Self::LogicalAnd => "&&",
             Self::LogicalOr => "||",
             Self::NullCoalescing => "??",
@@ -90,18 +124,18 @@ impl BinaryOp {
     /// Returns the operator precedence level (higher value binds tighter).
     pub const fn precedence(&self) -> u8 {
         match self {
-            Self::NullCoalescing => 1,
-            Self::LogicalOr => 2,
-            Self::LogicalAnd => 3,
-            Self::BitOr => 4,
-            Self::BitXor => 5,
-            Self::BitAnd => 6,
-            Self::Eq | Self::Ne => 7,
-            Self::Lt | Self::Le | Self::Gt | Self::Ge | Self::Is => 8,
-            Self::Shl | Self::Shr | Self::Ushr => 9,
-            Self::Add | Self::Sub => 10,
-            Self::Mul | Self::Div | Self::Rem => 11,
-            Self::Pow => 12,
+            Self::NullCoalescing => precedence::NULL_COALESCING,
+            Self::LogicalOr => precedence::LOGICAL_OR,
+            Self::LogicalAnd => precedence::LOGICAL_AND,
+            Self::BitOr => precedence::BIT_OR,
+            Self::BitXor => precedence::BIT_XOR,
+            Self::BitAnd => precedence::BIT_AND,
+            Self::Eq | Self::Ne => precedence::EQUALITY,
+            Self::Lt | Self::Le | Self::Gt | Self::Ge => precedence::RELATIONAL,
+            Self::Shl | Self::Shr | Self::Ushr => precedence::SHIFT,
+            Self::Add | Self::Sub => precedence::ADDITIVE,
+            Self::Mul | Self::Div | Self::Rem => precedence::MULTIPLICATIVE,
+            Self::Pow => precedence::POWER,
         }
     }
 
@@ -166,6 +200,16 @@ impl PrefixUnaryOp {
             Self::Typeof => "typeof",
         }
     }
+
+    /// Returns the unified precedence level for prefix unary operators.
+    pub const fn precedence(&self) -> u8 {
+        precedence::PREFIX
+    }
+
+    /// Returns the Pratt parser right binding power for prefix unary operators.
+    pub const fn right_binding_power(&self) -> u8 {
+        precedence::PREFIX_RIGHT_BP
+    }
 }
 
 impl fmt::Display for PrefixUnaryOp {
@@ -177,9 +221,9 @@ impl fmt::Display for PrefixUnaryOp {
 /// Postfix unary operator variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PostfixUnaryOp {
-    PostInc,  // ++
-    PostDec,  // --
-    NonNull,  // ! (non-null assertion)
+    PostInc, // ++
+    PostDec, // --
+    NonNull, // ! (non-null assertion)
 }
 
 impl PostfixUnaryOp {
@@ -189,6 +233,16 @@ impl PostfixUnaryOp {
             Self::PostDec => "--",
             Self::NonNull => "!",
         }
+    }
+
+    /// Returns the unified precedence level for postfix unary operators.
+    pub const fn precedence(&self) -> u8 {
+        precedence::POSTFIX
+    }
+
+    /// Returns the Pratt parser left binding power for postfix unary operators.
+    pub const fn left_binding_power(&self) -> u8 {
+        precedence::POSTFIX_LEFT_BP
     }
 }
 
@@ -262,6 +316,21 @@ impl AssignOp {
             Self::LogicalOrAssign => Some(BinaryOp::LogicalOr),
             Self::NullCoalescingAssign => Some(BinaryOp::NullCoalescing),
         }
+    }
+
+    /// Returns the unified precedence level for assignment operators.
+    pub const fn precedence(&self) -> u8 {
+        precedence::ASSIGN
+    }
+
+    /// Assignment operators are always right-associative.
+    pub const fn associativity(&self) -> Associativity {
+        Associativity::Right
+    }
+
+    /// Returns the Pratt parser binding powers `(left_bp, right_bp)` for assignment.
+    pub const fn binding_power(&self) -> (u8, u8) {
+        precedence::ASSIGN_BP
     }
 }
 

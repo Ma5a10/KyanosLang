@@ -8,7 +8,7 @@
 
 use crate::{
     pattern::{BindingTarget, Pattern, VarModifier},
-    Expr, Ident, Span, Type,
+    Decl, Expr, Ident, NodeId, Span, Type,
 };
 
 /// A single variable binding in a `let` or `const` statement.
@@ -273,6 +273,24 @@ impl UnsafeStmt {
     }
 }
 
+/// Labeled statement for loop control: `outer: for (...) { ... }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabeledStmt {
+    pub label: Ident,
+    pub statement: Box<Stmt>,
+    pub span: Span,
+}
+
+impl LabeledStmt {
+    pub fn new(label: Ident, statement: Stmt, span: Span) -> Self {
+        Self {
+            label,
+            statement: Box::new(statement),
+            span,
+        }
+    }
+}
+
 /// A block of statements enclosed in braces: `{ stmt1; stmt2; }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -322,24 +340,46 @@ pub enum StmtKind {
     Defer(DeferStmt),
     /// Unsafe execution block: `unsafe { ... }`.
     Unsafe(UnsafeStmt),
+    /// Local declaration inside a block: `function helper() {}`, `struct Local {}`.
+    Decl(Box<Decl>),
+    /// Labeled statement: `label: for (...) { ... }`.
+    Labeled(LabeledStmt),
     /// Debugger breakpoint: `debugger;`.
     Debugger,
     /// Expression statement: `expr;`.
     Expr(Expr),
     /// Empty statement (redundant semicolon): `;`.
     Empty,
+    /// Placeholder produced by fault-tolerant error recovery in the parser.
+    Error,
 }
 
-/// A complete statement node carrying its kind and span.
+/// A complete statement node carrying its node ID, kind, and span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
+    pub id: NodeId,
     pub kind: StmtKind,
     pub span: Span,
 }
 
 impl Stmt {
     pub fn new(kind: StmtKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            id: NodeId::DUMMY,
+            kind,
+            span,
+        }
+    }
+
+    /// Assigns an explicit `NodeId` to this statement node.
+    pub const fn with_id(mut self, id: NodeId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Constructs a synthetic error recovery statement node.
+    pub fn error(span: Span) -> Self {
+        Self::new(StmtKind::Error, span)
     }
 
     pub fn block(block: Block) -> Self {
@@ -441,6 +481,18 @@ impl Stmt {
 
     pub fn unsafe_stmt(block: Block, span: Span) -> Self {
         Self::new(StmtKind::Unsafe(UnsafeStmt::new(block, span)), span)
+    }
+
+    pub fn decl(decl: Decl) -> Self {
+        let span = decl.span;
+        Self::new(StmtKind::Decl(Box::new(decl)), span)
+    }
+
+    pub fn labeled(label: Ident, statement: Stmt, span: Span) -> Self {
+        Self::new(
+            StmtKind::Labeled(LabeledStmt::new(label, statement, span)),
+            span,
+        )
     }
 
     pub fn debugger(span: Span) -> Self {

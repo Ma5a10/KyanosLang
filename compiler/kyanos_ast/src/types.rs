@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::{Ident, Span};
+use crate::{Expr, Ident, NodeId, Span};
 
 /// Built-in predefined primitive types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -167,11 +167,11 @@ impl TypeParameters {
     }
 }
 
-/// Fixed array size descriptor (e.g. `10` or a constant expression string).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Fixed array size descriptor (e.g. `10` or a constant expression).
+#[derive(Debug, Clone, PartialEq)]
 pub enum ArraySize {
     Literal(u64),
-    Expr(String),
+    Expr(Box<Expr>),
 }
 
 /// A member field in an anonymous struct type `{ x: int, readonly y?: double }`.
@@ -309,22 +309,36 @@ pub enum TypeKind {
     Parenthesized(Box<Type>),
     /// The `this` type.
     This,
-    /// Union type: `T | U`.
-    Union(Vec<Type>),
-    /// Intersection type: `T & U`.
-    Intersection(Vec<Type>),
+    /// Placeholder produced by fault-tolerant error recovery in the parser.
+    Error,
 }
 
-/// A complete type annotation node with kind and span.
+/// A complete type annotation node with node ID, kind, and span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
+    pub id: NodeId,
     pub kind: TypeKind,
     pub span: Span,
 }
 
 impl Type {
     pub fn new(kind: TypeKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            id: NodeId::DUMMY,
+            kind,
+            span,
+        }
+    }
+
+    /// Assigns an explicit `NodeId` to this type node.
+    pub const fn with_id(mut self, id: NodeId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Constructs a synthetic error recovery type node.
+    pub fn error(span: Span) -> Self {
+        Self::new(TypeKind::Error, span)
     }
 
     pub fn predefined(pt: PredefinedType, span: Span) -> Self {

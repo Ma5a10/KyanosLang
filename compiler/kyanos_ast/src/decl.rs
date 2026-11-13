@@ -9,7 +9,7 @@
 use crate::{
     pattern::BindingTarget,
     stmt::{Block, UsingStmt, VariableStmt},
-    Expr, Ident, PredefinedType, PrivateIdent, ReturnType, Span, StringLiteral, Type,
+    Expr, Ident, NodeId, PredefinedType, PrivateIdent, ReturnType, Span, StringLiteral, Type,
     TypeParameters, TypeReference,
 };
 
@@ -45,21 +45,48 @@ impl AttributeArg {
     }
 }
 
+/// Input form of an attribute annotation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttributeInput {
+    /// Bare attribute without arguments: `#[inline]`.
+    None,
+    /// Parenthesized argument list: `#[repr(C)]`, `#[link(name = "sqlite3")]`.
+    Args(Vec<AttributeArg>),
+    /// Key-value assignment attribute: `#[link_name = "sqlite3_open"]`.
+    Value(Expr),
+}
+
 /// An attribute annotation: `#[repr(C)]`, `#[link = "..."]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
     pub name: Ident,
-    pub args: Vec<AttributeArg>,
+    pub input: AttributeInput,
     pub span: Span,
 }
 
 impl Attribute {
     pub fn new(name: Ident, args: Vec<AttributeArg>, span: Span) -> Self {
-        Self { name, args, span }
+        Self {
+            name,
+            input: AttributeInput::Args(args),
+            span,
+        }
     }
 
     pub fn simple(name: Ident, span: Span) -> Self {
-        Self::new(name, Vec::new(), span)
+        Self {
+            name,
+            input: AttributeInput::None,
+            span,
+        }
+    }
+
+    pub fn with_value(name: Ident, value: Expr, span: Span) -> Self {
+        Self {
+            name,
+            input: AttributeInput::Value(value),
+            span,
+        }
     }
 }
 
@@ -646,18 +673,36 @@ pub enum DeclKind {
     ExternBlock(ExternBlockDecl),
     /// Standalone FFI extern declaration (`extern "C" function ...`).
     SingleExtern(SingleExternDecl),
+    /// Placeholder produced by fault-tolerant error recovery in the parser.
+    Error,
 }
 
-/// A complete declaration node carrying its kind and span.
+/// A complete declaration node carrying its node ID, kind, and span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decl {
+    pub id: NodeId,
     pub kind: DeclKind,
     pub span: Span,
 }
 
 impl Decl {
     pub fn new(kind: DeclKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            id: NodeId::DUMMY,
+            kind,
+            span,
+        }
+    }
+
+    /// Assigns an explicit `NodeId` to this declaration node.
+    pub const fn with_id(mut self, id: NodeId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Constructs a synthetic error recovery declaration node.
+    pub fn error(span: Span) -> Self {
+        Self::new(DeclKind::Error, span)
     }
 
     pub fn function(decl: FunctionDecl) -> Self {

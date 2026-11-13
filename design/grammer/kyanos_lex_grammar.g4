@@ -22,6 +22,7 @@ Class: 'class';
 Struct: 'struct';
 Interface: 'interface';
 Enum: 'enum';
+Type: 'type';
 Constructor: 'constructor';
 
 If: 'if';

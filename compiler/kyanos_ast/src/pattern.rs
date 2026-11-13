@@ -6,7 +6,9 @@
 
 //! Pattern matching and destructuring AST representations.
 
-use crate::{Expr, Ident, Literal, PrefixUnaryOp, Span, TypeName};
+use std::fmt;
+
+use crate::{Expr, Ident, Literal, NodeId, Span, TypeName};
 
 /// Variable declaration modifier (`let` or `const`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,30 +35,38 @@ pub enum BindingTarget {
     /// Wildcard / discard: `_`.
     Wildcard(Span),
     /// Tuple destructuring: `[a, b, ...rest]`.
-    Tuple(Vec<TuplePatternElement>),
+    Tuple {
+        elements: Vec<TuplePatternElement>,
+        span: Span,
+    },
     /// Object destructuring: `{ a, b: c = 10, ...rest }`.
-    Object(Vec<ObjectPatternProp>),
+    Object {
+        props: Vec<ObjectPatternProp>,
+        span: Span,
+    },
 }
 
 impl BindingTarget {
+    pub fn ident(id: Ident) -> Self {
+        Self::Ident(id)
+    }
+
+    pub fn wildcard(span: Span) -> Self {
+        Self::Wildcard(span)
+    }
+
+    pub fn tuple(elements: Vec<TuplePatternElement>, span: Span) -> Self {
+        Self::Tuple { elements, span }
+    }
+
+    pub fn object(props: Vec<ObjectPatternProp>, span: Span) -> Self {
+        Self::Object { props, span }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Self::Ident(id) => id.span,
-            Self::Wildcard(span) => *span,
-            Self::Tuple(elems) => {
-                if let (Some(first), Some(last)) = (elems.first(), elems.last()) {
-                    first.span.merge(last.span)
-                } else {
-                    Span::default()
-                }
-            }
-            Self::Object(props) => {
-                if let (Some(first), Some(last)) = (props.first(), props.last()) {
-                    first.span().merge(last.span())
-                } else {
-                    Span::default()
-                }
-            }
+            Self::Wildcard(span) | Self::Tuple { span, .. } | Self::Object { span, .. } => *span,
         }
     }
 }
@@ -138,16 +148,38 @@ impl StructFieldPattern {
     }
 }
 
+/// Sign prefix allowed on numeric literal patterns (`+` or `-`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LiteralSign {
+    Plus,
+    Minus,
+}
+
+impl LiteralSign {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Plus => "+",
+            Self::Minus => "-",
+        }
+    }
+}
+
+impl fmt::Display for LiteralSign {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Literal pattern with optional sign: `+1`, `-3.14`, `"ok"`, `true`, `null`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralPattern {
-    pub sign: Option<PrefixUnaryOp>,
+    pub sign: Option<LiteralSign>,
     pub literal: Literal,
     pub span: Span,
 }
 
 impl LiteralPattern {
-    pub fn new(sign: Option<PrefixUnaryOp>, literal: Literal, span: Span) -> Self {
+    pub fn new(sign: Option<LiteralSign>, literal: Literal, span: Span) -> Self {
         Self {
             sign,
             literal,
@@ -185,18 +217,38 @@ pub enum PatternKind {
     },
     /// Tuple pattern: `[a, ...rest, b]`.
     Tuple(Vec<TuplePatternElement>),
+    /// Object / anonymous struct pattern: `{ x: 0, y: let y, ...rest }`.
+    Object(Vec<ObjectPatternProp>),
+    /// Placeholder produced by fault-tolerant error recovery in the parser.
+    Error,
 }
 
-/// A complete pattern node carrying its kind and source span.
+/// A complete pattern node carrying its node ID, kind, and source span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
+    pub id: NodeId,
     pub kind: PatternKind,
     pub span: Span,
 }
 
 impl Pattern {
     pub fn new(kind: PatternKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            id: NodeId::DUMMY,
+            kind,
+            span,
+        }
+    }
+
+    /// Assigns an explicit `NodeId` to this pattern node.
+    pub const fn with_id(mut self, id: NodeId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Constructs a synthetic error recovery pattern node.
+    pub fn error(span: Span) -> Self {
+        Self::new(PatternKind::Error, span)
     }
 
     pub fn wildcard(span: Span) -> Self {
@@ -207,7 +259,7 @@ impl Pattern {
         Self::new(PatternKind::Literal(LiteralPattern::unsigned(lit)), span)
     }
 
-    pub fn signed_literal(sign: PrefixUnaryOp, lit: Literal, span: Span) -> Self {
+    pub fn signed_literal(sign: LiteralSign, lit: Literal, span: Span) -> Self {
         Self::new(
             PatternKind::Literal(LiteralPattern::new(Some(sign), lit, span)),
             span,
@@ -244,5 +296,9 @@ impl Pattern {
 
     pub fn tuple(elements: Vec<TuplePatternElement>, span: Span) -> Self {
         Self::new(PatternKind::Tuple(elements), span)
+    }
+
+    pub fn object(props: Vec<ObjectPatternProp>, span: Span) -> Self {
+        Self::new(PatternKind::Object(props), span)
     }
 }

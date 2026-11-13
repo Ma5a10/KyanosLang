@@ -122,7 +122,7 @@ fn test_next_token_identifier() {
 #[test]
 fn test_keywords() {
     // Declarations & Definitions
-    let decls = tokenize("let const function class struct interface enum constructor").unwrap();
+    let decls = tokenize("let const function class struct interface enum type constructor").unwrap();
     assert_eq!(
         decls,
         vec![
@@ -133,6 +133,7 @@ fn test_keywords() {
             TokenKind::Struct,
             TokenKind::Interface,
             TokenKind::Enum,
+            TokenKind::Type,
             TokenKind::Constructor,
         ]
     );

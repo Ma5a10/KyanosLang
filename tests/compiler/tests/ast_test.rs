@@ -8,20 +8,21 @@
 
 use kyanos_ast::{
     Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement, ArraySize,
-    ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, BinaryOp, BindingTarget, Block,
-    ClassDecl, ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl,
-    DeclKind, EnumDecl, EnumVariant, ExportKind, ExportSpecifier, ExportStmt, Expr, ExprKind,
-    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ForInit,
-    ForIterationKind, ForStmt, FunctionDecl, FunctionParam, FunctionType, FunctionTypeParam,
-    GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature,
-    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, Literal, MemberProperty,
-    MethodDecl, ObjectMember, ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind,
-    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix,
-    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind,
-    StringLiteral, StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember,
-    SwitchCase, SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl,
-    TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference,
-    VarModifier, VariableDecl,
+    ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, AttributeInput, BinaryOp,
+    BindingTarget, Block, CStringLiteral, ClassDecl, ClassElementName, ClassField, ClassMember,
+    ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant, ExportKind,
+    ExportSpecifier, ExportStmt, Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl, ExternMember,
+    ExternParameterList, ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType,
+    FunctionTypeParam, GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt,
+    IndexSignature, InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt,
+    Literal, LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember,
+    ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind, PostfixUnaryOp,
+    PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix, RestParameter,
+    ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral,
+    StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember, SwitchCase,
+    SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments,
+    TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
+    VariableDecl, precedence,
 };
 
 // =============================================================================
@@ -67,6 +68,24 @@ fn test_binary_op_precedence_and_associativity() {
 
     let (l_add, r_add) = BinaryOp::Add.binding_power();
     assert!(l_add < r_add); // Left-associative: left_bp < right_bp
+
+    // Unified Pratt parser precedence ordering:
+    // Assign < Ternary < BinaryOp (NullCoalescing..Pow) < Cast (as) < Prefix < Postfix
+    assert!(AssignOp::Assign.precedence() < precedence::TERNARY);
+    assert!(precedence::TERNARY < BinaryOp::NullCoalescing.precedence());
+    assert_eq!(BinaryOp::Lt.precedence(), precedence::TYPE_TEST);
+    assert!(BinaryOp::Pow.precedence() < precedence::CAST);
+    assert!(precedence::CAST < PrefixUnaryOp::Minus.precedence());
+    assert!(PrefixUnaryOp::Minus.precedence() < PostfixUnaryOp::PostInc.precedence());
+
+    let (l_assign, r_assign) = AssignOp::Assign.binding_power();
+    assert!(l_assign > r_assign);
+    assert_eq!(AssignOp::Assign.associativity(), Associativity::Right);
+    assert!(precedence::TERNARY_BP.0 > precedence::TERNARY_BP.1);
+    assert_eq!(precedence::TYPE_TEST_BP, BinaryOp::Lt.binding_power());
+    assert!(precedence::CAST_LEFT_BP > BinaryOp::Pow.binding_power().0);
+    assert!(PrefixUnaryOp::Not.right_binding_power() > precedence::CAST_LEFT_BP);
+    assert!(PostfixUnaryOp::NonNull.left_binding_power() > PrefixUnaryOp::Not.right_binding_power());
 }
 
 #[test]
@@ -105,6 +124,42 @@ fn test_literal_creation_and_display() {
 
     let null_lit = Literal::null(Span::new(23, 27));
     assert_eq!(null_lit.to_string(), "null");
+
+    let unit_lit = Literal::unit(Span::new(28, 30));
+    assert_eq!(unit_lit.kind, LiteralKind::Unit);
+    assert_eq!(unit_lit.to_string(), "()");
+    assert_eq!(unit_lit.span, Span::new(28, 30));
+
+    let valid_cstr = CStringLiteral::new("hello", "c\"hello\"");
+    assert!(!valid_cstr.has_interior_nul());
+    let invalid_cstr = CStringLiteral::new("hel\0lo", "c\"hel\\0lo\"");
+    assert!(invalid_cstr.has_interior_nul());
+}
+
+#[test]
+fn test_span_robustness() {
+    assert!(Span::DUMMY.is_dummy());
+    assert!(Span::DUMMY.is_empty());
+    assert_eq!(Span::DUMMY.len(), 0);
+
+    let s1 = Span::new(10, 15);
+    let s2 = Span::new(20, 25);
+    assert!(!s1.is_dummy());
+    assert!(!s1.is_empty());
+    assert_eq!(s1.len(), 5);
+    assert_eq!(s1.merge(s2), Span::new(10, 25));
+
+    // Merging with Span::DUMMY must not drag start to 0
+    assert_eq!(Span::DUMMY.merge(s1), s1);
+    assert_eq!(s1.merge(Span::DUMMY), s1);
+    assert_eq!(Span::DUMMY.merge(Span::DUMMY), Span::DUMMY);
+
+    // Zero-length non-dummy span at non-zero offset
+    let empty_at_5 = Span::new(5, 5);
+    assert!(!empty_at_5.is_dummy());
+    assert!(empty_at_5.is_empty());
+    assert_eq!(empty_at_5.len(), 0);
+    assert_eq!(empty_at_5.merge(s2), Span::new(5, 25));
 }
 
 // =============================================================================
@@ -185,6 +240,21 @@ fn test_array_and_optional_types() {
         TypeKind::FixedArray {
             elem: Box::new(elem_ty.clone()),
             size: ArraySize::Literal(16)
+        }
+    );
+
+    // Fixed array with expression size: int[N]
+    let size_expr = Box::new(Expr::ident(Ident::new("N", Span::new(4, 5))));
+    let expr_fixed_arr = Type::fixed_array(
+        elem_ty.clone(),
+        ArraySize::Expr(size_expr.clone()),
+        Span::new(0, 6),
+    );
+    assert_eq!(
+        expr_fixed_arr.kind,
+        TypeKind::FixedArray {
+            elem: Box::new(elem_ty.clone()),
+            size: ArraySize::Expr(size_expr)
         }
     );
 
@@ -390,21 +460,58 @@ fn test_call_and_member_expressions() {
         panic!("expected ExprKind::Call");
     }
 
-    // obj.prop and obj.#privateProp
+    // obj.prop, obj.#privateProp, obj?.prop, and obj?.#privateProp
     let obj = Expr::ident(Ident::new("obj", Span::new(0, 3)));
     let member_pub = Expr::member(
         obj.clone(),
         MemberProperty::Ident(Ident::new("field", Span::new(4, 9))),
+        false,
         Span::new(0, 9),
     );
     let member_priv = Expr::member(
         obj.clone(),
         MemberProperty::Private(PrivateIdent::new("#secret", Span::new(4, 11))),
+        false,
         Span::new(0, 11),
+    );
+    let opt_member_pub = Expr::member(
+        obj.clone(),
+        MemberProperty::Ident(Ident::new("field", Span::new(5, 10))),
+        true,
+        Span::new(0, 10),
+    );
+    let opt_member_priv = Expr::member(
+        obj.clone(),
+        MemberProperty::Private(PrivateIdent::new("#secret", Span::new(5, 12))),
+        true,
+        Span::new(0, 12),
     );
 
     assert_eq!(member_pub.span, Span::new(0, 9));
     assert_eq!(member_priv.span, Span::new(0, 11));
+    assert!(matches!(
+        member_pub.kind,
+        ExprKind::Member {
+            is_optional: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        opt_member_pub.kind,
+        ExprKind::Member {
+            property: MemberProperty::Ident(_),
+            is_optional: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        opt_member_priv.kind,
+        ExprKind::Member {
+            property: MemberProperty::Private(_),
+            is_optional: true,
+            ..
+        }
+    ));
 
     // Index: arr[0] and optArr?.[0]
     let index_expr = Expr::literal(Literal::integer("0", 0, Radix::Decimal, Span::new(4, 5)));
@@ -460,6 +567,24 @@ fn test_literal_complex_expressions() {
         panic!("expected ExprKind::Object");
     }
 
+    // Dictionary string key span preservation: { "host": "localhost" }
+    let dict_key = PropertyName::String(StringLiteral::new("host", "\"host\"", Span::new(2, 8)));
+    assert_eq!(dict_key.span(), Span::new(2, 8));
+    let dict_prop = ObjectMember::Property {
+        name: dict_key,
+        value: Expr::literal(Literal::string(
+            "localhost",
+            "\"localhost\"",
+            Span::new(10, 21),
+        )),
+        span: Span::new(2, 21),
+    };
+    if let ObjectMember::Property { name, .. } = dict_prop {
+        assert_eq!(name.span(), Span::new(2, 8));
+    } else {
+        panic!("expected ObjectMember::Property");
+    }
+
     // Struct Instantiation: Point { x: 10, ...other }
     let struct_init = Expr::new(
         ExprKind::StructInstantiation {
@@ -499,36 +624,46 @@ fn test_literal_complex_expressions() {
 
 #[test]
 fn test_control_and_functional_expressions() {
-    // Arrow Function: (x: int): int => x + 1
-    let param = FunctionParam::simple(
+    // Arrow Function: (x: int, ...rest: int[]): int => x + 1
+    let param = Parameter::simple(
         Ident::new("x", Span::new(1, 2)),
         Some(Type::predefined(PredefinedType::Int, Span::new(4, 7))),
         Span::new(1, 7),
     );
+    let rest = RestParameter::new(
+        Ident::new("rest", Span::new(12, 16)),
+        Some(Type::dynamic_array(
+            Type::predefined(PredefinedType::Int, Span::new(18, 21)),
+            Span::new(18, 23),
+        )),
+        Span::new(9, 23),
+    );
+    let params = ParameterList::new(vec![param], Some(rest), Span::new(0, 24));
     let body = Expr::binary(
         BinaryOp::Add,
-        Expr::ident(Ident::new("x", Span::new(19, 20))),
-        Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(23, 24))),
+        Expr::ident(Ident::new("x", Span::new(33, 34))),
+        Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(37, 38))),
     );
     let arrow = Expr::new(
         ExprKind::ArrowFunction {
             is_async: false,
             type_parameters: None,
-            params: vec![param],
+            params,
             return_type: Some(ReturnType::Type(Type::predefined(
                 PredefinedType::Int,
-                Span::new(10, 13),
+                Span::new(26, 29),
             ))),
             body: ArrowBody::Expr(Box::new(body)),
         },
-        Span::new(0, 24),
+        Span::new(0, 38),
     );
     if let ExprKind::ArrowFunction {
         is_async, params, ..
     } = arrow.kind
     {
         assert!(!is_async);
-        assert_eq!(params.len(), 1);
+        assert_eq!(params.params.len(), 1);
+        assert!(params.rest.is_some());
     } else {
         panic!("expected ExprKind::ArrowFunction");
     }
@@ -636,15 +771,17 @@ fn test_patterns() {
 
     // Literal Pattern: -42
     let signed_lit = Pattern::signed_literal(
-        PrefixUnaryOp::Minus,
+        LiteralSign::Minus,
         Literal::integer("42", 42, Radix::Decimal, Span::new(1, 3)),
         Span::new(0, 3),
     );
     if let PatternKind::Literal(lit_pat) = signed_lit.kind {
-        assert_eq!(lit_pat.sign, Some(PrefixUnaryOp::Minus));
+        assert_eq!(lit_pat.sign, Some(LiteralSign::Minus));
     } else {
         panic!("expected PatternKind::Literal");
     }
+    assert_eq!(LiteralSign::Plus.as_str(), "+");
+    assert_eq!(LiteralSign::Minus.to_string(), "-");
 
     // Var Pattern: let x
     let var_pat = Pattern::var(
@@ -745,30 +882,60 @@ fn test_patterns() {
     }
 
     // Object Pattern: { x, y: target = 10, ...rest }
-    let obj_target = BindingTarget::Object(vec![
-        ObjectPatternProp::Property {
-            name: Ident::new("x", Span::new(2, 3)),
-            target: None,
-            default: None,
-            span: Span::new(2, 3),
-        },
-        ObjectPatternProp::Property {
-            name: Ident::new("y", Span::new(5, 6)),
-            target: Some(BindingTarget::Ident(Ident::new("target", Span::new(8, 14)))),
-            default: Some(Box::new(Expr::literal(Literal::integer(
-                "10",
-                10,
-                Radix::Decimal,
-                Span::new(17, 19),
-            )))),
-            span: Span::new(5, 19),
-        },
-        ObjectPatternProp::Rest {
-            target: Ident::new("rest", Span::new(24, 28)),
-            span: Span::new(21, 28),
-        },
-    ]);
-    assert_eq!(obj_target.span(), Span::new(2, 28));
+    let obj_target = BindingTarget::object(
+        vec![
+            ObjectPatternProp::Property {
+                name: Ident::new("x", Span::new(2, 3)),
+                target: None,
+                default: None,
+                span: Span::new(2, 3),
+            },
+            ObjectPatternProp::Property {
+                name: Ident::new("y", Span::new(5, 6)),
+                target: Some(BindingTarget::Ident(Ident::new("target", Span::new(8, 14)))),
+                default: Some(Box::new(Expr::literal(Literal::integer(
+                    "10",
+                    10,
+                    Radix::Decimal,
+                    Span::new(17, 19),
+                )))),
+                span: Span::new(5, 19),
+            },
+            ObjectPatternProp::Rest {
+                target: Ident::new("rest", Span::new(24, 28)),
+                span: Span::new(21, 28),
+            },
+        ],
+        Span::new(0, 30),
+    );
+    assert_eq!(obj_target.span(), Span::new(0, 30));
+
+    // Empty tuple binding target preserves enclosing bracket span: let [] = empty;
+    let empty_tuple = BindingTarget::tuple(Vec::new(), Span::new(4, 6));
+    assert_eq!(empty_tuple.span(), Span::new(4, 6));
+
+    // Object pattern in PatternKind: { x, y: target = 10, ...rest }
+    let obj_pat = Pattern::object(
+        vec![
+            ObjectPatternProp::Property {
+                name: Ident::new("x", Span::new(2, 3)),
+                target: None,
+                default: None,
+                span: Span::new(2, 3),
+            },
+            ObjectPatternProp::Rest {
+                target: Ident::new("rest", Span::new(8, 12)),
+                span: Span::new(5, 12),
+            },
+        ],
+        Span::new(0, 14),
+    );
+    if let PatternKind::Object(props) = obj_pat.kind {
+        assert_eq!(props.len(), 2);
+        assert_eq!(obj_pat.span, Span::new(0, 14));
+    } else {
+        panic!("expected PatternKind::Object");
+    }
 }
 
 // =============================================================================
@@ -809,18 +976,22 @@ fn test_variable_and_resource_statements() {
     }
 
     // const [a, b] = tuple;
-    let tuple_target = BindingTarget::Tuple(vec![
-        TuplePatternElement::normal(Pattern::var(
-            Ident::new("a", Span::new(7, 8)),
-            None,
-            Span::new(7, 8),
-        )),
-        TuplePatternElement::normal(Pattern::var(
-            Ident::new("b", Span::new(10, 11)),
-            None,
-            Span::new(10, 11),
-        )),
-    ]);
+    let tuple_target = BindingTarget::tuple(
+        vec![
+            TuplePatternElement::normal(Pattern::var(
+                Ident::new("a", Span::new(7, 8)),
+                None,
+                Span::new(7, 8),
+            )),
+            TuplePatternElement::normal(Pattern::var(
+                Ident::new("b", Span::new(10, 11)),
+                None,
+                Span::new(10, 11),
+            )),
+        ],
+        Span::new(6, 12),
+    );
+    assert_eq!(tuple_target.span(), Span::new(6, 12));
     let const_destruct = Stmt::variable(
         VarModifier::Const,
         vec![VariableDecl::new(
@@ -1011,6 +1182,42 @@ fn test_switch_and_jump_statements() {
     assert_eq!(ret.span, Span::new(0, 11));
     assert_eq!(brk.span, Span::new(0, 16));
     assert_eq!(cont.span, Span::new(0, 9));
+
+    // Labeled statement: outer: while (cond) { ... }
+    let labeled = Stmt::labeled(
+        Ident::new("outer", Span::new(0, 5)),
+        Stmt::while_stmt(
+            Expr::ident(Ident::new("cond", Span::new(14, 18))),
+            Stmt::block(Block::empty(Span::new(20, 22))),
+            Span::new(7, 22),
+        ),
+        Span::new(0, 22),
+    );
+    if let StmtKind::Labeled(LabeledStmt { label, .. }) = labeled.kind {
+        assert_eq!(label.as_str(), "outer");
+        assert_eq!(labeled.span, Span::new(0, 22));
+    } else {
+        panic!("expected StmtKind::Labeled");
+    }
+
+    // Local declaration inside a block: function helper() {}
+    let local_fn = Decl::function(FunctionDecl::new(
+        Vec::new(),
+        false,
+        Ident::new("helper", Span::new(9, 15)),
+        None,
+        ParameterList::empty(Span::new(15, 17)),
+        None,
+        Some(Block::empty(Span::new(18, 20))),
+        Span::new(0, 20),
+    ));
+    let local_decl_stmt = Stmt::decl(local_fn);
+    if let StmtKind::Decl(d) = local_decl_stmt.kind {
+        assert_eq!(d.span, Span::new(0, 20));
+        assert!(matches!(d.kind, DeclKind::Function(_)));
+    } else {
+        panic!("expected StmtKind::Decl");
+    }
 }
 
 // =============================================================================
@@ -1019,8 +1226,19 @@ fn test_switch_and_jump_statements() {
 
 #[test]
 fn test_function_and_struct_declarations() {
-    // #[inline] async function fetch<T>(url: string, ...headers: string[]): Promise<T> { ... }
+    // #[inline] #[export_name = "my_fn"] async function fetch<T>(url: string, ...headers: string[]): Promise<T> { ... }
     let attr = Attribute::simple(Ident::new("inline", Span::new(2, 8)), Span::new(0, 9));
+    assert!(matches!(attr.input, AttributeInput::None));
+    let export_attr = Attribute::with_value(
+        Ident::new("export_name", Span::new(12, 23)),
+        Expr::literal(Literal::string(
+            "my_fn",
+            "\"my_fn\"",
+            Span::new(26, 33),
+        )),
+        Span::new(10, 34),
+    );
+    assert!(matches!(export_attr.input, AttributeInput::Value(_)));
     let param1 = Parameter::simple(
         Ident::new("url", Span::new(26, 29)),
         Some(Type::predefined(PredefinedType::String, Span::new(31, 37))),
@@ -1044,7 +1262,7 @@ fn test_function_and_struct_declarations() {
     let type_params = TypeParameters::new(vec![t_param], Span::new(22, 25));
 
     let fn_decl = FunctionDecl::new(
-        vec![attr],
+        vec![attr, export_attr],
         true,
         Ident::new("fetch", Span::new(16, 21)),
         Some(type_params),
@@ -1060,7 +1278,7 @@ fn test_function_and_struct_declarations() {
     let decl = Decl::function(fn_decl);
     if let DeclKind::Function(f) = decl.kind {
         assert!(f.is_async);
-        assert_eq!(f.attributes.len(), 1);
+        assert_eq!(f.attributes.len(), 2);
         assert_eq!(f.params.params.len(), 1);
         assert!(f.params.rest.is_some());
     } else {
@@ -1077,6 +1295,7 @@ fn test_function_and_struct_declarations() {
         )],
         Span::new(0, 9),
     );
+    assert!(matches!(repr_attr.input, AttributeInput::Args(_)));
     let field = StructMember::Field(StructField {
         accessibility: Some(Accessibility::Public),
         is_static: false,
@@ -1315,7 +1534,7 @@ fn test_enum_type_alias_and_ffi_declarations() {
     });
     let extern_block = ExternBlockDecl::new(
         Vec::new(),
-        StringLiteral::new("C", "\"C\""),
+        StringLiteral::new("C", "\"C\"", Span::new(7, 10)),
         vec![extern_func],
         Span::new(0, 47),
     );
@@ -1330,7 +1549,7 @@ fn test_enum_type_alias_and_ffi_declarations() {
     // extern "C" function printf(fmt: rawptr, ...): int;
     let single_extern = SingleExternDecl::new(
         Vec::new(),
-        StringLiteral::new("C", "\"C\""),
+        StringLiteral::new("C", "\"C\"", Span::new(7, 10)),
         Ident::new("printf", Span::new(20, 26)),
         None,
         ExternParameterList::new(
@@ -1371,7 +1590,7 @@ fn test_import_statements() {
     );
     let named_import = ImportStmt::new(
         Some(ImportClause::Named(vec![spec1, spec2])),
-        StringLiteral::new("./module", "\"./module\""),
+        StringLiteral::new("./module", "\"./module\"", Span::new(31, 41)),
         Span::new(0, 42),
     );
     if let Some(ImportClause::Named(specs)) = &named_import.clause {
@@ -1385,7 +1604,7 @@ fn test_import_statements() {
     // import * as Math from "./math";
     let ns_import = ImportStmt::new(
         Some(ImportClause::Namespace(Ident::new("Math", Span::new(12, 16)))),
-        StringLiteral::new("./math", "\"./math\""),
+        StringLiteral::new("./math", "\"./math\"", Span::new(22, 30)),
         Span::new(0, 32),
     );
     if let Some(ImportClause::Namespace(ns)) = &ns_import.clause {
@@ -1400,7 +1619,7 @@ fn test_import_statements() {
             default_name: Ident::new("Item", Span::new(7, 11)),
             named: vec![ImportSpecifier::simple(Ident::new("SubItem", Span::new(15, 22)))],
         }),
-        StringLiteral::new("./item", "\"./item\""),
+        StringLiteral::new("./item", "\"./item\"", Span::new(29, 37)),
         Span::new(0, 38),
     );
     if let Some(ImportClause::Default { default_name, named }) = &def_import.clause {
@@ -1411,7 +1630,10 @@ fn test_import_statements() {
     }
 
     // import "./side_effect";
-    let side_effect = ImportStmt::side_effect(StringLiteral::new("./side_effect", "\"./side_effect\""), Span::new(0, 23));
+    let side_effect = ImportStmt::side_effect(
+        StringLiteral::new("./side_effect", "\"./side_effect\"", Span::new(7, 22)),
+        Span::new(0, 23),
+    );
     assert!(side_effect.clause.is_none());
 }
 
@@ -1446,7 +1668,7 @@ fn test_export_statements() {
                 Span::new(14, 24),
             ),
         ],
-        Some(StringLiteral::new("./module", "\"./module\"")),
+        Some(StringLiteral::new("./module", "\"./module\"", Span::new(31, 41))),
         Span::new(0, 42),
     );
     if let ExportKind::Named { specifiers, source } = &re_export.kind {
@@ -1475,7 +1697,7 @@ fn test_program_root() {
     // export function run(): int { return add(1, 2); }
     let import_elem = SourceElement::Import(ImportStmt::new(
         Some(ImportClause::Named(vec![ImportSpecifier::simple(Ident::new("add", Span::new(9, 12)))])),
-        StringLiteral::new("./math", "\"./math\""),
+        StringLiteral::new("./math", "\"./math\"", Span::new(20, 28)),
         Span::new(0, 31),
     ));
 
@@ -1507,4 +1729,46 @@ fn test_program_root() {
     assert_eq!(program.elements.len(), 2);
     assert_eq!(program.elements[0].span(), Span::new(0, 31));
     assert_eq!(program.elements[1].span(), Span::new(33, 72));
+}
+
+#[test]
+fn test_node_id_and_error_recovery_nodes() {
+    assert!(NodeId::DUMMY.is_dummy());
+    assert_eq!(NodeId::default(), NodeId::DUMMY);
+    let id1 = NodeId::new(1);
+    assert!(!id1.is_dummy());
+    assert_eq!(id1.as_u32(), 1);
+    assert_eq!(id1.as_usize(), 1);
+
+    let err_span = Span::new(10, 15);
+
+    let expr_err = Expr::error(err_span);
+    assert!(expr_err.id.is_dummy());
+    assert_eq!(expr_err.kind, ExprKind::Error);
+    assert_eq!(expr_err.span, err_span);
+    assert_eq!(expr_err.with_id(NodeId::new(1)).id, NodeId::new(1));
+
+    let stmt_err = Stmt::error(err_span);
+    assert!(stmt_err.id.is_dummy());
+    assert_eq!(stmt_err.kind, StmtKind::Error);
+    assert_eq!(stmt_err.span, err_span);
+    assert_eq!(stmt_err.with_id(NodeId::new(2)).id, NodeId::new(2));
+
+    let type_err = Type::error(err_span);
+    assert!(type_err.id.is_dummy());
+    assert_eq!(type_err.kind, TypeKind::Error);
+    assert_eq!(type_err.span, err_span);
+    assert_eq!(type_err.with_id(NodeId::new(3)).id, NodeId::new(3));
+
+    let pat_err = Pattern::error(err_span);
+    assert!(pat_err.id.is_dummy());
+    assert_eq!(pat_err.kind, PatternKind::Error);
+    assert_eq!(pat_err.span, err_span);
+    assert_eq!(pat_err.with_id(NodeId::new(4)).id, NodeId::new(4));
+
+    let decl_err = Decl::error(err_span);
+    assert!(decl_err.id.is_dummy());
+    assert_eq!(decl_err.kind, DeclKind::Error);
+    assert_eq!(decl_err.span, err_span);
+    assert_eq!(decl_err.with_id(NodeId::new(5)).id, NodeId::new(5));
 }

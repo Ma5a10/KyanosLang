@@ -16,31 +16,31 @@ pub mod stmt;
 pub mod types;
 
 pub use decl::{
-    Accessibility, AccessorKind, Attribute, AttributeArg, ClassDecl, ClassElementName, ClassField,
-    ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant,
-    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ExternVariableDecl,
-    FunctionDecl, GetterSetterDecl, IndexSignature, InterfaceDecl, InterfaceMember,
-    InterfaceMethod, InterfaceProperty, MethodDecl, Parameter, ParameterList, RestParameter,
-    SingleExternDecl, StructDecl, StructField, StructMember, TypeAliasDecl,
+    Accessibility, AccessorKind, Attribute, AttributeArg, AttributeInput, ClassDecl,
+    ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind,
+    EnumDecl, EnumVariant, ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList,
+    ExternVariableDecl, FunctionDecl, GetterSetterDecl, IndexSignature, InterfaceDecl,
+    InterfaceMember, InterfaceMethod, InterfaceProperty, MethodDecl, Parameter, ParameterList,
+    RestParameter, SingleExternDecl, StructDecl, StructField, StructMember, TypeAliasDecl,
 };
 
 pub use expr::{
-    Argument, ArrayElement, ArrowBody, Expr, ExprKind, FunctionParam, MemberProperty, ObjectMember,
-    ObjectMethod, PropertyName, SizeofTarget, StructFieldInit, SwitchExprArm, TemplateStringPart,
+    Argument, ArrayElement, ArrowBody, Expr, ExprKind, MemberProperty, ObjectMember, ObjectMethod,
+    PropertyName, SizeofTarget, StructFieldInit, SwitchExprArm, TemplateStringPart,
 };
 pub use ident::{Ident, PrivateIdent};
 pub use literal::{
     BigIntLiteral, CStringLiteral, CharLiteral, FloatLiteral, IntegerLiteral, Literal, LiteralKind,
     Radix, StringLiteral,
 };
-pub use op::{AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
+pub use op::{precedence, AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
 pub use pattern::{
-    BindingTarget, LiteralPattern, ObjectPatternProp, Pattern, PatternKind, StructFieldPattern,
-    TuplePatternElement, VarModifier,
+    BindingTarget, LiteralPattern, LiteralSign, ObjectPatternProp, Pattern, PatternKind,
+    StructFieldPattern, TuplePatternElement, VarModifier,
 };
 pub use stmt::{
     Block, BreakStmt, ContinueStmt, DeferStmt, DoWhileStmt, ForInit, ForIterationKind, ForStmt,
-    IfStmt, ReturnStmt, Stmt, StmtKind, SwitchCase, SwitchStmt, UnsafeStmt, UsingStmt,
+    IfStmt, LabeledStmt, ReturnStmt, Stmt, StmtKind, SwitchCase, SwitchStmt, UnsafeStmt, UsingStmt,
     VariableDecl, VariableStmt, WhileStmt,
 };
 pub use types::{
@@ -48,6 +48,41 @@ pub use types::{
     Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate,
     TypeReference,
 };
+
+/// Unique identifier for an AST node within a module/compilation unit.
+///
+/// Constructed with `NodeId::DUMMY` by default and populated sequentially
+/// (`0, 1, 2, ...`) during parsing or prior to semantic analysis, enabling
+/// `O(1)` side-table lookups in `kyanos_sema`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeId(pub u32);
+
+impl NodeId {
+    /// Sentinel / uninitialized node ID (`u32::MAX`).
+    pub const DUMMY: Self = Self(u32::MAX);
+
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+
+    pub const fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+
+    pub const fn is_dummy(self) -> bool {
+        self.0 == Self::DUMMY.0
+    }
+}
+
+impl Default for NodeId {
+    fn default() -> Self {
+        Self::DUMMY
+    }
+}
 
 /// Represents a source code span [start, end) byte offsets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -57,12 +92,38 @@ pub struct Span {
 }
 
 impl Span {
+    /// Dummy / uninitialized span (`0..0`).
+    pub const DUMMY: Self = Self { start: 0, end: 0 };
+
     pub const fn new(start: usize, end: usize) -> Self {
+        debug_assert!(start <= end, "Span start must not exceed end");
         Self { start, end }
     }
 
+    /// Returns `true` if this span is the dummy/default span (`0..0`).
+    pub const fn is_dummy(&self) -> bool {
+        self.start == 0 && self.end == 0
+    }
+
+    /// Returns `true` if this span covers zero bytes (`start >= end`).
+    pub const fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+
+    /// Returns the byte length of the span (`end - start`, saturating at 0).
+    pub const fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
     /// Returns a new span that covers both `self` and `other`.
+    /// If either span is `Span::DUMMY` (`0..0`), returns the other span to prevent offset-0 pollution.
     pub fn merge(self, other: Self) -> Self {
+        if self.is_dummy() {
+            return other;
+        }
+        if other.is_dummy() {
+            return self;
+        }
         Self {
             start: self.start.min(other.start),
             end: self.end.max(other.end),

@@ -7,9 +7,9 @@
 //! Expression AST representations for Kyanos.
 
 use crate::{
-    pattern::Pattern, stmt::Block, AssignOp, BinaryOp, Ident, Literal, PostfixUnaryOp,
-    PredefinedType, PrefixUnaryOp, PrivateIdent, ReturnType, Span, StringLiteral, Type,
-    TypeArguments, TypeName, TypeParameters,
+    pattern::Pattern, stmt::Block, AssignOp, BinaryOp, Ident, Literal, NodeId, ParameterList,
+    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, ReturnType, Span, StringLiteral,
+    Type, TypeArguments, TypeName, TypeParameters,
 };
 
 /// An argument passed to a function or constructor call.
@@ -36,41 +36,6 @@ impl Argument {
 
     pub fn spread(expr: Expr, span: Span) -> Self {
         Self::new(true, expr, span)
-    }
-}
-
-/// A parameter in a function or arrow function declaration.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FunctionParam {
-    pub name: Ident,
-    pub is_readonly: bool,
-    pub is_optional: bool,
-    pub ty: Option<Type>,
-    pub default: Option<Box<Expr>>,
-    pub span: Span,
-}
-
-impl FunctionParam {
-    pub fn new(
-        name: Ident,
-        is_readonly: bool,
-        is_optional: bool,
-        ty: Option<Type>,
-        default: Option<Expr>,
-        span: Span,
-    ) -> Self {
-        Self {
-            name,
-            is_readonly,
-            is_optional,
-            ty,
-            default: default.map(Box::new),
-            span,
-        }
-    }
-
-    pub fn simple(name: Ident, ty: Option<Type>, span: Span) -> Self {
-        Self::new(name, false, false, ty, None, span)
     }
 }
 
@@ -114,7 +79,7 @@ impl PropertyName {
     pub fn span(&self) -> Span {
         match self {
             Self::Ident(id) => id.span,
-            Self::String(s) => Span::new(0, s.raw.len()), // best effort or handled in caller
+            Self::String(s) => s.span,
             Self::Numeric(n) => n.span,
             Self::Computed(e) => e.span,
         }
@@ -127,7 +92,7 @@ pub struct ObjectMethod {
     pub is_async: bool,
     pub name: Ident,
     pub type_parameters: Option<TypeParameters>,
-    pub params: Vec<FunctionParam>,
+    pub params: ParameterList,
     pub return_type: Option<ReturnType>,
     pub body: Block,
     pub span: Span,
@@ -265,7 +230,7 @@ pub enum ExprKind {
     ArrowFunction {
         is_async: bool,
         type_parameters: Option<TypeParameters>,
-        params: Vec<FunctionParam>,
+        params: ParameterList,
         return_type: Option<ReturnType>,
         body: ArrowBody,
     },
@@ -290,12 +255,11 @@ pub enum ExprKind {
         index: Box<Expr>,
         is_optional: bool,
     },
-    /// Optional chaining property access: `obj?.prop`.
-    OptionalChain { target: Box<Expr>, property: Ident },
-    /// Member dot access: `obj.prop` or `obj.#privateProp`.
+    /// Member dot or optional-chain access: `obj.prop`, `obj.#privateProp`, `obj?.prop`, `obj?.#privateProp`.
     Member {
         target: Box<Expr>,
         property: MemberProperty,
+        is_optional: bool,
     },
     /// Function or method call: `f(a, b)` or `f<T, U>(a, b)`.
     Call {
@@ -349,18 +313,38 @@ pub enum ExprKind {
         target: Box<Expr>,
         value: Box<Expr>,
     },
+
+    // --- Error Recovery ---
+    /// Placeholder produced by fault-tolerant error recovery in the parser.
+    Error,
 }
 
-/// A complete expression node carrying its kind and span.
+/// A complete expression node carrying its node ID, kind, and span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
+    pub id: NodeId,
     pub kind: ExprKind,
     pub span: Span,
 }
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            id: NodeId::DUMMY,
+            kind,
+            span,
+        }
+    }
+
+    /// Assigns an explicit `NodeId` to this expression node.
+    pub const fn with_id(mut self, id: NodeId) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Constructs a synthetic error recovery expression node.
+    pub fn error(span: Span) -> Self {
+        Self::new(ExprKind::Error, span)
     }
 
     pub fn literal(lit: Literal) -> Self {
@@ -429,11 +413,12 @@ impl Expr {
         )
     }
 
-    pub fn member(target: Expr, property: MemberProperty, span: Span) -> Self {
+    pub fn member(target: Expr, property: MemberProperty, is_optional: bool, span: Span) -> Self {
         Self::new(
             ExprKind::Member {
                 target: Box::new(target),
                 property,
+                is_optional,
             },
             span,
         )
