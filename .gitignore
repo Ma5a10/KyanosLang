@@ -29,6 +29,7 @@ rustc-ice-*.txt
 AGENTS.md
 /**/.antlr
 .vscode/**
+/bk
 
 # Node.js
 node_modules/
