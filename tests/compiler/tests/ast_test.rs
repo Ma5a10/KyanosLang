@@ -7,26 +7,26 @@
 //! Unified tests for Kyanos AST nodes and data structures.
 
 use kyanos_ast::{
-    Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement, ArraySize,
-    ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, AttributeInput, BinaryOp,
-    BindingTarget, Block, CStringLiteral, ClassDecl, ClassElementName, ClassField, ClassMember,
-    ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant, ExportKind,
+    precedence, Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement,
+    ArraySize, ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, AttributeInput,
+    BinaryOp, BindingTarget, Block, CStringLiteral, ClassDecl, ClassElementName, ClassField,
+    ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant, ExportKind,
     ExportSpecifier, ExportStmt, Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl, ExternMember,
     ExternParameterList, ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType,
     FunctionTypeParam, GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt,
-    IndexSignature, InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt,
-    Literal, LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember,
-    ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind, PostfixUnaryOp,
-    PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix, RestParameter,
-    ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral,
-    StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember, SwitchCase,
-    SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments,
-    TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
-    VariableDecl, precedence,
+    IndexSignature, InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty,
+    LabeledStmt, Literal, LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId,
+    ObjectMember, ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind,
+    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix,
+    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind,
+    StringLiteral, StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember,
+    SwitchCase, SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl,
+    TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference,
+    VarModifier, VariableDecl,
 };
 
 // =============================================================================
-// Ident Tests
+// Identifier Tests
 // =============================================================================
 
 #[test]
@@ -85,7 +85,9 @@ fn test_binary_op_precedence_and_associativity() {
     assert_eq!(precedence::TYPE_TEST_BP, BinaryOp::Lt.binding_power());
     assert!(precedence::CAST_LEFT_BP > BinaryOp::Pow.binding_power().0);
     assert!(PrefixUnaryOp::Not.right_binding_power() > precedence::CAST_LEFT_BP);
-    assert!(PostfixUnaryOp::NonNull.left_binding_power() > PrefixUnaryOp::Not.right_binding_power());
+    assert!(
+        PostfixUnaryOp::NonNull.left_binding_power() > PrefixUnaryOp::Not.right_binding_power()
+    );
 }
 
 #[test]
@@ -1231,11 +1233,7 @@ fn test_function_and_struct_declarations() {
     assert!(matches!(attr.input, AttributeInput::None));
     let export_attr = Attribute::with_value(
         Ident::new("export_name", Span::new(12, 23)),
-        Expr::literal(Literal::string(
-            "my_fn",
-            "\"my_fn\"",
-            Span::new(26, 33),
-        )),
+        Expr::literal(Literal::string("my_fn", "\"my_fn\"", Span::new(26, 33))),
         Span::new(10, 34),
     );
     assert!(matches!(export_attr.input, AttributeInput::Value(_)));
@@ -1603,7 +1601,10 @@ fn test_import_statements() {
 
     // import * as Math from "./math";
     let ns_import = ImportStmt::new(
-        Some(ImportClause::Namespace(Ident::new("Math", Span::new(12, 16)))),
+        Some(ImportClause::Namespace(Ident::new(
+            "Math",
+            Span::new(12, 16),
+        ))),
         StringLiteral::new("./math", "\"./math\"", Span::new(22, 30)),
         Span::new(0, 32),
     );
@@ -1617,12 +1618,19 @@ fn test_import_statements() {
     let def_import = ImportStmt::new(
         Some(ImportClause::Default {
             default_name: Ident::new("Item", Span::new(7, 11)),
-            named: vec![ImportSpecifier::simple(Ident::new("SubItem", Span::new(15, 22)))],
+            named: vec![ImportSpecifier::simple(Ident::new(
+                "SubItem",
+                Span::new(15, 22),
+            ))],
         }),
         StringLiteral::new("./item", "\"./item\"", Span::new(29, 37)),
         Span::new(0, 38),
     );
-    if let Some(ImportClause::Default { default_name, named }) = &def_import.clause {
+    if let Some(ImportClause::Default {
+        default_name,
+        named,
+    }) = &def_import.clause
+    {
         assert_eq!(default_name.as_str(), "Item");
         assert_eq!(named.len(), 1);
     } else {
@@ -1668,7 +1676,11 @@ fn test_export_statements() {
                 Span::new(14, 24),
             ),
         ],
-        Some(StringLiteral::new("./module", "\"./module\"", Span::new(31, 41))),
+        Some(StringLiteral::new(
+            "./module",
+            "\"./module\"",
+            Span::new(31, 41),
+        )),
         Span::new(0, 42),
     );
     if let ExportKind::Named { specifiers, source } = &re_export.kind {
@@ -1680,7 +1692,12 @@ fn test_export_statements() {
 
     // export default 42;
     let export_default = ExportStmt::default_expr(
-        Expr::literal(Literal::integer("42", 42, Radix::Decimal, Span::new(15, 17))),
+        Expr::literal(Literal::integer(
+            "42",
+            42,
+            Radix::Decimal,
+            Span::new(15, 17),
+        )),
         Span::new(0, 18),
     );
     if let ExportKind::Default(e) = &export_default.kind {
@@ -1696,7 +1713,9 @@ fn test_program_root() {
     // import { add } from "./math";
     // export function run(): int { return add(1, 2); }
     let import_elem = SourceElement::Import(ImportStmt::new(
-        Some(ImportClause::Named(vec![ImportSpecifier::simple(Ident::new("add", Span::new(9, 12)))])),
+        Some(ImportClause::Named(vec![ImportSpecifier::simple(
+            Ident::new("add", Span::new(9, 12)),
+        )])),
         StringLiteral::new("./math", "\"./math\"", Span::new(20, 28)),
         Span::new(0, 31),
     ));
@@ -1706,8 +1725,18 @@ fn test_program_root() {
             Expr::ident(Ident::new("add", Span::new(60, 63))),
             None,
             vec![
-                Argument::normal(Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(64, 65)))),
-                Argument::normal(Expr::literal(Literal::integer("2", 2, Radix::Decimal, Span::new(67, 68)))),
+                Argument::normal(Expr::literal(Literal::integer(
+                    "1",
+                    1,
+                    Radix::Decimal,
+                    Span::new(64, 65),
+                ))),
+                Argument::normal(Expr::literal(Literal::integer(
+                    "2",
+                    2,
+                    Radix::Decimal,
+                    Span::new(67, 68),
+                ))),
             ],
             Span::new(60, 69),
         )),
@@ -1719,11 +1748,15 @@ fn test_program_root() {
         Ident::new("run", Span::new(48, 51)),
         None,
         ParameterList::empty(Span::new(51, 53)),
-        Some(ReturnType::Type(Type::predefined(PredefinedType::Int, Span::new(55, 58)))),
+        Some(ReturnType::Type(Type::predefined(
+            PredefinedType::Int,
+            Span::new(55, 58),
+        ))),
         Some(Block::new(vec![ret_stmt], Span::new(52, 72))),
         Span::new(40, 72),
     ));
-    let export_elem = SourceElement::Export(ExportStmt::decl(Vec::new(), fn_decl, Span::new(33, 72)));
+    let export_elem =
+        SourceElement::Export(ExportStmt::decl(Vec::new(), fn_decl, Span::new(33, 72)));
 
     let program = Program::new(vec![import_elem, export_elem], Span::new(0, 72));
     assert_eq!(program.elements.len(), 2);
