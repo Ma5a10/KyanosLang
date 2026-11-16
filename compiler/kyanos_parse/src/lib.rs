@@ -8,8 +8,14 @@
 //!
 //! Reference grammar: `design/grammer/kyanos_syntax_grammar.g4`.
 
+pub mod decl;
 pub mod error;
+pub mod expr;
+pub mod literal;
+pub mod pattern;
+pub mod stmt;
 pub mod stream;
+pub mod types;
 
 use kyanos_ast::{NodeId, Program, Span};
 use kyanos_lexer::{Token, TokenKind};
@@ -36,6 +42,8 @@ pub struct Parser<'a> {
     stream: TokenStream<'a>,
     errors: Vec<ParseError>,
     next_node_id: u32,
+    /// Nesting depth of `(...)` and `[...]` groupings allowing multiline expressions.
+    pub(crate) grouping_depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -54,6 +62,7 @@ impl<'a> Parser<'a> {
             stream,
             errors,
             next_node_id: start_node_id,
+            grouping_depth: 0,
         }
     }
 
@@ -63,6 +72,7 @@ impl<'a> Parser<'a> {
             stream,
             errors: Vec::new(),
             next_node_id: 0,
+            grouping_depth: 0,
         }
     }
 
@@ -225,7 +235,8 @@ impl<'a> Parser<'a> {
     /// Saves the current parser cursor and diagnostic count for backtracking.
     #[inline]
     pub fn checkpoint(&self) -> Checkpoint {
-        self.stream.save_position(self.errors.len())
+        self.stream
+            .save_position(self.errors.len(), self.grouping_depth)
     }
 
     /// Rewinds the parser cursor and truncates diagnostics back to `cp`.
@@ -233,6 +244,20 @@ impl<'a> Parser<'a> {
     pub fn restore(&mut self, cp: Checkpoint) {
         self.stream.restore_position(&cp);
         self.errors.truncate(cp.error_len);
+        self.grouping_depth = cp.grouping_depth;
+    }
+
+    /// Executes `f` inside a delimited grouping (`(...)` or `[...]`), permitting
+    /// multi-line binary and postfix expression continuations.
+    #[inline]
+    pub(crate) fn with_grouping<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        self.grouping_depth += 1;
+        let res = f(self);
+        self.grouping_depth -= 1;
+        res
     }
 
     // -------------------------------------------------------------------------

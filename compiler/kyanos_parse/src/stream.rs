@@ -21,6 +21,7 @@ pub struct Checkpoint {
     pub(crate) virtual_token: Option<Token>,
     pub(crate) last_span: Span,
     pub(crate) error_len: usize,
+    pub(crate) grouping_depth: u32,
 }
 
 /// Token stream supplying non-trivia tokens to [`crate::Parser`].
@@ -241,12 +242,13 @@ impl<'a> TokenStream<'a> {
 
     /// Captures the stream's cursor state for speculative parsing.
     #[inline]
-    pub(crate) fn save_position(&self, error_len: usize) -> Checkpoint {
+    pub(crate) fn save_position(&self, error_len: usize, grouping_depth: u32) -> Checkpoint {
         Checkpoint {
             cursor: self.cursor,
             virtual_token: self.virtual_token,
             last_span: self.last_span,
             error_len,
+            grouping_depth,
         }
     }
 
