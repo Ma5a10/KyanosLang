@@ -44,9 +44,9 @@ pub use stmt::{
     VariableDecl, VariableStmt, WhileStmt,
 };
 pub use types::{
-    AnonymousStructField, ArraySize, FunctionType, FunctionTypeParam, PredefinedType, ReturnType,
-    Type, TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate,
-    TypeReference,
+    AnonymousStructField, AnonymousStructMember, AnonymousStructMethod, ArraySize, FunctionType,
+    FunctionTypeParam, PredefinedType, ReturnType, Type, TypeArguments, TypeKind, TypeName,
+    TypeParameter, TypeParameters, TypePredicate, TypeReference,
 };
 
 /// Unique identifier for an AST node within a module/compilation unit.

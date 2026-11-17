@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::{Expr, Ident, NodeId, Span};
+use crate::{Expr, Ident, NodeId, ParameterList, Span};
 
 /// Built-in predefined primitive types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -196,6 +196,53 @@ impl AnonymousStructField {
     }
 }
 
+/// A method signature in an anonymous struct type `{ onClick(x: int, y: int): void }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnonymousStructMethod {
+    pub name: Ident,
+    pub is_optional: bool,
+    pub type_parameters: Option<TypeParameters>,
+    pub params: ParameterList,
+    pub return_type: ReturnType,
+    pub span: Span,
+}
+
+impl AnonymousStructMethod {
+    pub fn new(
+        name: Ident,
+        is_optional: bool,
+        type_parameters: Option<TypeParameters>,
+        params: ParameterList,
+        return_type: ReturnType,
+        span: Span,
+    ) -> Self {
+        Self {
+            name,
+            is_optional,
+            type_parameters,
+            params,
+            return_type,
+            span,
+        }
+    }
+}
+
+/// A member inside an anonymous struct type (field or method signature).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnonymousStructMember {
+    Field(AnonymousStructField),
+    Method(AnonymousStructMethod),
+}
+
+impl AnonymousStructMember {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Field(f) => f.span,
+            Self::Method(m) => m.span,
+        }
+    }
+}
+
 /// Parameter in a function type `(x: int, y: double) => void`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionTypeParam {
@@ -301,8 +348,8 @@ pub enum TypeKind {
     Optional(Box<Type>),
     /// Tuple type: `[T, U, V]`.
     Tuple(Vec<Type>),
-    /// Anonymous struct type: `{ x: int, y: double }`.
-    AnonymousStruct(Vec<AnonymousStructField>),
+    /// Anonymous struct type: `{ x: int, y: double, onClick(x: int): void }`.
+    AnonymousStruct(Vec<AnonymousStructMember>),
     /// Function type: `(x: int) => void`.
     Function(FunctionType),
     /// Parenthesized type: `(T)`.

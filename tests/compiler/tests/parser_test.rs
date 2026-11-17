@@ -5,10 +5,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use kyanos_ast::{
-    ArrowBody, AssignOp, BinaryOp, BindingTarget, Expr, ExprKind, LiteralKind, MemberProperty,
-    NodeId, ObjectMember, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PropertyName,
-    Radix, SizeofTarget, Span, StmtKind, StructFieldInit, SwitchExprArm, TemplateStringPart,
-    TypeKind,
+    AnonymousStructMember, ArraySize, ArrowBody, AssignOp, BinaryOp, BindingTarget, Expr, ExprKind,
+    LiteralKind, LiteralSign, MemberProperty, NodeId, ObjectMember, ObjectPatternProp, Pattern,
+    PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PropertyName, Radix, ReturnType,
+    SizeofTarget, Span, StmtKind, StructFieldInit, StructFieldPattern, SwitchExprArm,
+    TemplateStringPart, Type, TypeKind, VarModifier,
 };
 use kyanos_lexer::TokenKind;
 use kyanos_parse::{ParseError, ParseErrorKind, Parser};
@@ -758,4 +759,333 @@ fn test_expression_newline_boundaries_and_continuations() {
 
     let paren_cont = parse_expr_ok("(a\n + b)");
     assert!(matches!(paren_cont.kind, ExprKind::Parenthesized(_)));
+}
+
+// =============================================================================
+// Phase 3: Type, Generics, and Pattern Parser Tests
+// =============================================================================
+
+fn parse_type_ok(source: &str) -> Type {
+    let mut parser = Parser::new(source);
+    let ty = parser.parse_type().expect("type should parse");
+    assert!(
+        parser.errors().is_empty(),
+        "unexpected parse errors for type `{}`: {:?}",
+        source,
+        parser.errors()
+    );
+    assert!(
+        parser.is_eof(),
+        "expected EOF after type `{}`, found {:?}",
+        source,
+        parser.current()
+    );
+    ty
+}
+
+fn parse_pattern_ok(source: &str) -> Pattern {
+    let mut parser = Parser::new(source);
+    let pat = parser.parse_pattern().expect("pattern should parse");
+    assert!(
+        parser.errors().is_empty(),
+        "unexpected parse errors for pattern `{}`: {:?}",
+        source,
+        parser.errors()
+    );
+    assert!(
+        parser.is_eof(),
+        "expected EOF after pattern `{}`, found {:?}",
+        source,
+        parser.current()
+    );
+    pat
+}
+
+fn parse_binding_ok(source: &str) -> BindingTarget {
+    let mut parser = Parser::new(source);
+    let target = parser
+        .parse_binding_target()
+        .expect("binding target should parse");
+    assert!(
+        parser.errors().is_empty(),
+        "unexpected parse errors for binding `{}`: {:?}",
+        source,
+        parser.errors()
+    );
+    assert!(
+        parser.is_eof(),
+        "expected EOF after binding `{}`, found {:?}",
+        source,
+        parser.current()
+    );
+    target
+}
+
+#[test]
+fn test_pointer_reference_array_optional_and_tuple_types() {
+    // *const int[]?  =>  Pointer { is_const: true, elem: Optional(DynamicArray(Int)) }
+    let ptr_ty = parse_type_ok("*const int[]?");
+    let TypeKind::Pointer {
+        is_const: true,
+        elem: opt_ty,
+    } = ptr_ty.kind
+    else {
+        panic!("expected const Pointer, got {:?}", ptr_ty.kind);
+    };
+    let TypeKind::Optional(arr_ty) = opt_ty.kind else {
+        panic!("expected Optional");
+    };
+    assert!(matches!(
+        arr_ty.kind,
+        TypeKind::DynamicArray(ref inner) if inner.kind == TypeKind::Predefined(PredefinedType::Int)
+    ));
+
+    // &int and &const string
+    assert!(matches!(
+        parse_type_ok("&int").kind,
+        TypeKind::ReferenceType {
+            is_const: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse_type_ok("&const string").kind,
+        TypeKind::ReferenceType { is_const: true, .. }
+    ));
+
+    // (*int)[]  =>  DynamicArray(Parenthesized(Pointer(Int)))
+    let arr_of_ptr = parse_type_ok("(*int)[]");
+    let TypeKind::DynamicArray(paren_ptr) = arr_of_ptr.kind else {
+        panic!("expected DynamicArray");
+    };
+    assert!(matches!(paren_ptr.kind, TypeKind::Parenthesized(_)));
+
+    // Fixed arrays: literal size & expression size
+    let fixed_lit = parse_type_ok("int[16]");
+    assert!(matches!(
+        fixed_lit.kind,
+        TypeKind::FixedArray {
+            size: ArraySize::Literal(16),
+            ..
+        }
+    ));
+
+    let fixed_expr = parse_type_ok("double[SIZE + 1]");
+    assert!(matches!(
+        fixed_expr.kind,
+        TypeKind::FixedArray {
+            size: ArraySize::Expr(_),
+            ..
+        }
+    ));
+
+    // Tuple type including `this`
+    let tuple_ty = parse_type_ok("[int, string, this]");
+    let TypeKind::Tuple(elems) = tuple_ty.kind else {
+        panic!("expected Tuple");
+    };
+    assert_eq!(elems.len(), 3);
+    assert_eq!(elems[2].kind, TypeKind::This);
+}
+
+#[test]
+fn test_anonymous_struct_types() {
+    // Comma-separated with readonly, optional fields, and method signature
+    let anon1 = parse_type_ok("{ readonly x: string, y?: int, onClick(x: int, y: int): void }");
+    let TypeKind::AnonymousStruct(members1) = anon1.kind else {
+        panic!("expected AnonymousStruct");
+    };
+    assert_eq!(members1.len(), 3);
+    assert!(matches!(
+        &members1[0],
+        AnonymousStructMember::Field(f) if f.is_readonly && !f.is_optional
+    ));
+    assert!(matches!(
+        &members1[1],
+        AnonymousStructMember::Field(f) if !f.is_readonly && f.is_optional
+    ));
+    assert!(matches!(
+        &members1[2],
+        AnonymousStructMember::Method(m) if m.name.as_str() == "onClick" && m.params.params.len() == 2
+    ));
+
+    // Semicolon and newline-separated fields and generic optional method
+    let anon2 = parse_type_ok("{\n a: int;\n b: bool\n compute?<T>(v: T): T\n}");
+    let TypeKind::AnonymousStruct(members2) = anon2.kind else {
+        panic!("expected AnonymousStruct");
+    };
+    assert_eq!(members2.len(), 3);
+    assert!(matches!(
+        &members2[2],
+        AnonymousStructMember::Method(m) if m.is_optional && m.type_parameters.is_some()
+    ));
+}
+
+#[test]
+fn test_function_types_and_nested_generics() {
+    // 1. Zero-param function type
+    let fn0 = parse_type_ok("() => void");
+    assert!(matches!(
+        fn0.kind,
+        TypeKind::Function(ref f) if f.params.is_empty() && f.type_parameters.is_none()
+    ));
+
+    // 2. Unnamed parameter types
+    let fn_unnamed = parse_type_ok("(int, string) => bool");
+    let TypeKind::Function(f_unnamed) = fn_unnamed.kind else {
+        panic!("expected Function type");
+    };
+    assert_eq!(f_unnamed.params.len(), 2);
+    assert!(f_unnamed.params[0].name.is_none());
+    assert!(f_unnamed.params[1].name.is_none());
+
+    // 3. Named, readonly, optional, rest params + type predicate return
+    let fn_pred = parse_type_ok("(readonly x?: int, ...rest: string[]) => val is string");
+    let TypeKind::Function(f_pred) = fn_pred.kind else {
+        panic!("expected Function type");
+    };
+    assert_eq!(f_pred.params.len(), 2);
+    assert!(f_pred.params[0].is_readonly);
+    assert!(f_pred.params[0].is_optional);
+    assert_eq!(
+        f_pred.params[0].name.as_ref().map(|i| i.as_str()),
+        Some("x")
+    );
+    assert!(f_pred.params[1].is_rest);
+    assert!(matches!(*f_pred.return_type, ReturnType::Predicate(_)));
+
+    // 4. Generic function type with constraint and default
+    let fn_gen = parse_type_ok("<T extends Object = int>(x: T) => T");
+    let TypeKind::Function(f_gen) = fn_gen.kind else {
+        panic!("expected generic Function type");
+    };
+    let tp = f_gen.type_parameters.expect("type parameters");
+    assert_eq!(tp.params.len(), 1);
+    assert!(tp.params[0].constraint.is_some());
+    assert!(tp.params[0].default.is_some());
+
+    // 5. Optional parenthesized function type
+    let opt_fn = parse_type_ok("((int) => void)?");
+    assert!(matches!(opt_fn.kind, TypeKind::Optional(_)));
+
+    // 6. Nested generics with `>>>` splitting
+    let nested = parse_type_ok("std.collections.Map<string, Array<Box<int>>>");
+    let TypeKind::Reference(outer_ref) = nested.kind else {
+        panic!("expected TypeReference");
+    };
+    assert_eq!(outer_ref.name.to_string(), "std.collections.Map");
+    let outer_args = outer_ref.type_arguments.expect("outer type args");
+    assert_eq!(outer_args.args.len(), 2);
+    assert!(matches!(outer_args.args[1].kind, TypeKind::Reference(_)));
+}
+
+#[test]
+fn test_patterns_and_binding_targets() {
+    // Wildcard, signed numeric literal, string literal, var patterns
+    assert_eq!(parse_pattern_ok("_").kind, PatternKind::Wildcard);
+
+    let signed = parse_pattern_ok("-42");
+    assert!(matches!(
+        signed.kind,
+        PatternKind::Literal(ref lp) if lp.sign == Some(LiteralSign::Minus)
+    ));
+
+    let const_var = parse_pattern_ok("const item");
+    assert!(matches!(
+        const_var.kind,
+        PatternKind::Var {
+            modifier: Some(VarModifier::Const),
+            ref name
+        } if name.as_str() == "item"
+    ));
+
+    // Struct pattern: Point { x: 0, y: let y, z, const w, ... }
+    let struct_pat = parse_pattern_ok("Point { x: 0, y: let y, z, const w, ... }");
+    let PatternKind::Struct {
+        struct_name,
+        fields,
+    } = struct_pat.kind
+    else {
+        panic!("expected Struct pattern");
+    };
+    assert_eq!(struct_name.to_string(), "Point");
+    assert_eq!(fields.len(), 5);
+    assert!(matches!(fields[0], StructFieldPattern::Field { .. }));
+    assert!(matches!(
+        fields[1],
+        StructFieldPattern::Field {
+            pattern: Pattern {
+                kind: PatternKind::Var {
+                    modifier: Some(VarModifier::Let),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        fields[2],
+        StructFieldPattern::Binding { modifier: None, .. }
+    ));
+    assert!(matches!(
+        fields[3],
+        StructFieldPattern::Binding {
+            modifier: Some(VarModifier::Const),
+            ..
+        }
+    ));
+    assert!(matches!(fields[4], StructFieldPattern::Rest(_)));
+
+    // Variant patterns: qualified unit variant and payload variant
+    let unit_variant = parse_pattern_ok("FileError.NotFound");
+    assert!(matches!(
+        unit_variant.kind,
+        PatternKind::Variant {
+            ref variant_name,
+            ref payload
+        } if variant_name.to_string() == "FileError.NotFound" && payload.is_empty()
+    ));
+
+    let payload_variant = parse_pattern_ok("Option.Some(let val)");
+    assert!(matches!(
+        payload_variant.kind,
+        PatternKind::Variant {
+            ref variant_name,
+            ref payload
+        } if variant_name.to_string() == "Option.Some" && payload.len() == 1
+    ));
+
+    // Tuple pattern with nesting and rest
+    let tuple_pat = parse_pattern_ok("[head, [a, -2], ...tail]");
+    let PatternKind::Tuple(elems) = tuple_pat.kind else {
+        panic!("expected Tuple pattern");
+    };
+    assert_eq!(elems.len(), 3);
+    assert!(!elems[0].is_rest);
+    assert!(matches!(elems[1].pattern.kind, PatternKind::Tuple(_)));
+    assert!(elems[2].is_rest);
+
+    // Object pattern in both Pattern and BindingTarget
+    let obj_pat = parse_pattern_ok("{ x, y: [a, b] = [1, 2], ...rest }");
+    let PatternKind::Object(props) = obj_pat.kind else {
+        panic!("expected Object pattern");
+    };
+    assert_eq!(props.len(), 3);
+    assert!(matches!(
+        props[1],
+        ObjectPatternProp::Property {
+            target: Some(BindingTarget::Tuple { .. }),
+            default: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(props[2], ObjectPatternProp::Rest { .. }));
+
+    // BindingTarget tuple & nested object destructuring
+    let bt = parse_binding_ok("[first, { a, b: renamed = 10 }, ...others]");
+    assert!(matches!(
+        bt,
+        BindingTarget::Tuple { ref elements, .. } if elements.len() == 3
+    ));
 }

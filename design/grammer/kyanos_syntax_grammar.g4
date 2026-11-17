@@ -440,12 +440,26 @@ referenceType:
 tupleType:
 	OpenBracket (type_ (Comma type_)* Comma?)? CloseBracket;
 
-// Anonymous Struct Type: { x: int, y: double } (value type, fixed shape)
-anonymousStructType: OpenBrace (interfaceMember)* CloseBrace;
+// Anonymous Struct Type: { x: int, y: double, onClick(x: int): void } (value type, fixed shape)
+anonymousStructType: OpenBrace anonymousStructMember* CloseBrace;
 
-// Function Type: (x: int, y: int) => int
+anonymousStructMember:
+	Readonly? Identifier Question? Colon type_ (Comma | eos)
+	| Identifier Question? typeParameters? OpenParen parameterList? CloseParen Colon returnType (
+		Comma
+		| eos
+	)
+	| Semicolon;
+
+// Function Type: (x: int, y: int) => int or (int, int) => int
 functionType:
-	typeParameters? OpenParen parameterList? CloseParen Arrow returnType;
+	typeParameters? OpenParen functionTypeParamList? CloseParen Arrow returnType;
+
+functionTypeParamList:
+	functionTypeParam (Comma functionTypeParam)* Comma?;
+
+functionTypeParam:
+	Ellipsis? Readonly? (Identifier Question? Colon)? type_;
 
 typeParameters: LessThan typeParameterList GreaterThan;
 

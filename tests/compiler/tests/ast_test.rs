@@ -7,22 +7,23 @@
 //! Unified tests for Kyanos AST nodes and data structures.
 
 use kyanos_ast::{
-    precedence, Accessibility, AccessorKind, AnonymousStructField, Argument, ArrayElement,
-    ArraySize, ArrowBody, AssignOp, Associativity, Attribute, AttributeArg, AttributeInput,
-    BinaryOp, BindingTarget, Block, CStringLiteral, ClassDecl, ClassElementName, ClassField,
-    ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind, EnumDecl, EnumVariant, ExportKind,
-    ExportSpecifier, ExportStmt, Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl, ExternMember,
-    ExternParameterList, ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType,
-    FunctionTypeParam, GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt,
-    IndexSignature, InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty,
-    LabeledStmt, Literal, LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId,
-    ObjectMember, ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind,
-    PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix,
-    RestParameter, ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind,
-    StringLiteral, StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember,
-    SwitchCase, SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl,
-    TypeArguments, TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference,
-    VarModifier, VariableDecl,
+    precedence, Accessibility, AccessorKind, AnonymousStructField, AnonymousStructMember,
+    AnonymousStructMethod, Argument, ArrayElement, ArraySize, ArrowBody, AssignOp, Associativity,
+    Attribute, AttributeArg, AttributeInput, BinaryOp, BindingTarget, Block, CStringLiteral,
+    ClassDecl, ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl,
+    DeclKind, EnumDecl, EnumVariant, ExportKind, ExportSpecifier, ExportStmt, Expr, ExprKind,
+    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ForInit,
+    ForIterationKind, ForStmt, FunctionDecl, FunctionType, FunctionTypeParam, GetterSetterDecl,
+    Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature, InterfaceDecl,
+    InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt, Literal, LiteralKind,
+    LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp, Parameter,
+    ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    PrivateIdent, Program, PropertyName, Radix, RestParameter, ReturnType, SingleExternDecl,
+    SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral, StructDecl, StructField,
+    StructFieldInit, StructFieldPattern, StructMember, SwitchCase, SwitchExprArm,
+    TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments, TypeKind,
+    TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
+    VariableDecl,
 };
 
 // =============================================================================
@@ -322,30 +323,49 @@ fn test_tuple_and_anonymous_struct_types() {
     let tuple_ty = Type::tuple(vec![t1.clone(), t2.clone()], Span::new(0, 13));
     assert_eq!(tuple_ty.kind, TypeKind::Tuple(vec![t1, t2.clone()]));
 
-    // Anonymous Struct: { readonly x: string, y?: int }
-    let fields = vec![
-        AnonymousStructField::new(
+    // Anonymous Struct: { readonly x: string, y?: int, onClick(x: int): void }
+    let members = vec![
+        AnonymousStructMember::Field(AnonymousStructField::new(
             true,
             Ident::new("x", Span::new(11, 12)),
             false,
             t2,
             Span::new(2, 20),
-        ),
-        AnonymousStructField::new(
+        )),
+        AnonymousStructMember::Field(AnonymousStructField::new(
             false,
             Ident::new("y", Span::new(22, 23)),
             true,
             Type::predefined(PredefinedType::Int, Span::new(27, 30)),
             Span::new(22, 30),
-        ),
+        )),
+        AnonymousStructMember::Method(AnonymousStructMethod::new(
+            Ident::new("onClick", Span::new(32, 39)),
+            false,
+            None,
+            ParameterList::new(
+                vec![Parameter::simple(
+                    Ident::new("x", Span::new(40, 41)),
+                    Some(Type::predefined(PredefinedType::Int, Span::new(43, 46))),
+                    Span::new(40, 46),
+                )],
+                None,
+                Span::new(39, 47),
+            ),
+            ReturnType::Type(Type::predefined(PredefinedType::Void, Span::new(49, 53))),
+            Span::new(32, 53),
+        )),
     ];
-    let anon_ty = Type::new(TypeKind::AnonymousStruct(fields), Span::new(0, 32));
-    if let TypeKind::AnonymousStruct(fs) = anon_ty.kind {
-        assert_eq!(fs.len(), 2);
-        assert!(fs[0].is_readonly);
-        assert!(!fs[0].is_optional);
-        assert!(!fs[1].is_readonly);
-        assert!(fs[1].is_optional);
+    let anon_ty = Type::new(TypeKind::AnonymousStruct(members), Span::new(0, 55));
+    if let TypeKind::AnonymousStruct(ms) = anon_ty.kind {
+        assert_eq!(ms.len(), 3);
+        assert!(
+            matches!(&ms[0], AnonymousStructMember::Field(f) if f.is_readonly && !f.is_optional)
+        );
+        assert!(
+            matches!(&ms[1], AnonymousStructMember::Field(f) if !f.is_readonly && f.is_optional)
+        );
+        assert!(matches!(&ms[2], AnonymousStructMember::Method(m) if m.name.as_str() == "onClick"));
     } else {
         panic!("expected TypeKind::AnonymousStruct");
     }
