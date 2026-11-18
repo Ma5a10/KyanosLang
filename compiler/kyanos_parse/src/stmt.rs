@@ -26,6 +26,7 @@ impl<'a> Parser<'a> {
 
         let mut statements = Vec::new();
         while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
+            let start_cursor = self.checkpoint().cursor;
             let parsed = if self.at_declaration_start() {
                 self.parse_decl().map(|decl| {
                     let id = self.alloc_id();
@@ -40,7 +41,7 @@ impl<'a> Parser<'a> {
                 Err(err) => {
                     let err_span = err.span;
                     self.report_error(err);
-                    self.advance_and_synchronize();
+                    self.synchronize_from(start_cursor);
                     let id = self.alloc_id();
                     statements.push(Stmt::error(err_span).with_id(id));
                 }

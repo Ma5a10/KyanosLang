@@ -96,6 +96,9 @@ impl<'a> Parser<'a> {
         let mut ty = self.parse_primary_type()?;
 
         loop {
+            if self.grouping_depth == 0 && self.current().has_leading_newline {
+                break;
+            }
             if self.eat(TokenKind::Question).is_some() {
                 let span = self.span_from(ty.span);
                 let id = self.alloc_id();

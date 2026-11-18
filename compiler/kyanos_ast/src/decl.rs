@@ -451,13 +451,36 @@ impl InterfaceDecl {
     }
 }
 
+/// A payload field inside an enum variant: `KeyPress(char)` or `Click(x: int, y: int)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumPayloadField {
+    pub name: Option<Ident>,
+    pub ty: Type,
+    pub span: Span,
+}
+
+impl EnumPayloadField {
+    pub fn new(name: Option<Ident>, ty: Type, span: Span) -> Self {
+        Self { name, ty, span }
+    }
+
+    pub fn unnamed(ty: Type) -> Self {
+        let span = ty.span;
+        Self::new(None, ty, span)
+    }
+
+    pub fn named(name: Ident, ty: Type, span: Span) -> Self {
+        Self::new(Some(name), ty, span)
+    }
+}
+
 /// Variant of an enumeration or algebraic data type (ADT).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumVariant {
     /// Variant with payload: `KeyPress(char)`, `Click(x: int, y: int)`.
     Tuple {
         name: Ident,
-        payload: ParameterList,
+        payload: Vec<EnumPayloadField>,
         span: Span,
     },
     /// Simple value/unit variant: `PageLoad`, `Ok = 200`.

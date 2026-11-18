@@ -5,15 +5,16 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use kyanos_ast::{
-    AnonymousStructMember, ArraySize, ArrowBody, AssignOp, BinaryOp, BindingTarget, Block, Expr,
-    ExprKind, ForInit, ForIterationKind, ForStmt, LiteralKind, LiteralSign, MemberProperty, NodeId,
-    ObjectMember, ObjectPatternProp, Pattern, PatternKind, PostfixUnaryOp, PredefinedType,
-    PrefixUnaryOp, PropertyName, Radix, ReturnType, SizeofTarget, Span, Stmt, StmtKind,
-    StructFieldInit, StructFieldPattern, SwitchCase, SwitchExprArm, TemplateStringPart, Type,
-    TypeKind, VarModifier,
+    AccessorKind, AnonymousStructMember, ArraySize, ArrowBody, AssignOp, AttributeInput, BinaryOp,
+    BindingTarget, Block, ClassElementName, ClassMember, DeclKind, EnumVariant, ExportKind, Expr,
+    ExprKind, ExternMember, ForInit, ForIterationKind, ForStmt, ImportClause, InterfaceMember,
+    LiteralKind, LiteralSign, MemberProperty, NodeId, ObjectMember, ObjectPatternProp, Pattern,
+    PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PropertyName, Radix, ReturnType,
+    SizeofTarget, SourceElement, Span, Stmt, StmtKind, StructFieldInit, StructFieldPattern,
+    StructMember, SwitchCase, SwitchExprArm, TemplateStringPart, Type, TypeKind, VarModifier,
 };
 use kyanos_lexer::TokenKind;
-use kyanos_parse::{ParseError, ParseErrorKind, Parser};
+use kyanos_parse::{parse, parse_expr, ParseError, ParseErrorKind, ParseOutput, Parser};
 
 fn parse_expr_ok(source: &str) -> Expr {
     let mut parser = Parser::new(source);
@@ -1327,4 +1328,357 @@ fn test_jump_defer_unsafe_labeled_newlines_and_recovery() {
         recovered.statements[1].kind,
         StmtKind::Variable(_)
     ));
+}
+
+// =============================================================================
+// Phase 5 & 6: Declarations, Attributes, C-FFI, Modules & Integration Tests
+// =============================================================================
+
+fn parse_program_ok(source: &str) -> ParseOutput {
+    let out = parse(source);
+    assert!(
+        !out.has_errors(),
+        "unexpected parse errors in program:\n{}\nerrors: {:?}",
+        source,
+        out.errors
+    );
+    out
+}
+
+#[test]
+fn test_import_and_export_statements() {
+    let out = parse_program_ok(
+        r#"
+import { Foo, Bar as Baz, } from "./mod"
+import * as Math from "./math"
+import DefaultItem from "./item"
+import Item, { Sub as Alias } from "./combo"
+import "./side_effect"
+
+export { Foo, Bar as OutBar } from "./reexport"
+export default (x: int) => x * 2
+#[export_name = "MyLib_Multiply"]
+export extern "C" function multiply(a: double, b: double): double {
+    return a * b
+}
+"#,
+    );
+
+    assert_eq!(out.program.elements.len(), 8);
+    assert!(matches!(
+        &out.program.elements[0],
+        SourceElement::Import(i) if matches!(i.clause, Some(ImportClause::Named(ref specs)) if specs.len() == 2)
+    ));
+    assert!(matches!(
+        &out.program.elements[1],
+        SourceElement::Import(i) if matches!(i.clause, Some(ImportClause::Namespace(ref id)) if id.as_str() == "Math")
+    ));
+    assert!(matches!(
+        &out.program.elements[2],
+        SourceElement::Import(i) if matches!(i.clause, Some(ImportClause::Default { ref named, .. }) if named.is_empty())
+    ));
+    assert!(matches!(
+        &out.program.elements[3],
+        SourceElement::Import(i) if matches!(i.clause, Some(ImportClause::Default { ref named, .. }) if named.len() == 1)
+    ));
+    assert!(matches!(
+        &out.program.elements[4],
+        SourceElement::Import(i) if i.clause.is_none()
+    ));
+    assert!(matches!(
+        &out.program.elements[5],
+        SourceElement::Export(e) if matches!(e.kind, ExportKind::Named { source: Some(_), .. })
+    ));
+    assert!(matches!(
+        &out.program.elements[6],
+        SourceElement::Export(e) if matches!(e.kind, ExportKind::Default(_))
+    ));
+    assert!(matches!(
+        &out.program.elements[7],
+        SourceElement::Export(e) if e.attributes.len() == 1 && matches!(e.kind, ExportKind::Decl(_))
+    ));
+}
+
+#[test]
+fn test_function_struct_class_and_interface_declarations() {
+    let out = parse_program_ok(
+        r#"
+async function fetch<T extends Comparable>(a: T, ...rest: T[]): Promise<T> {
+    function localHelper(x: int): int { return x + 1 }
+    return a
+}
+
+function forwardDecl(x: int): void
+
+#[repr(C)]
+#[repr(align(16))]
+struct Vector2<T> {
+    public readonly x: T
+    private static count: int = 0
+    constructor(x: T) {
+        this.x = x
+    }
+    public length(): double {
+        return 0.0
+    }
+}
+
+class AdminUser extends User implements Disposable, Serializable {
+    private #token: string
+    get token(): string { return this.#token }
+    set #token(v: string) { this.#token = v }
+    get(): int { return 1 }
+    constructor(id: ulong) {
+        super(id)
+    }
+}
+
+interface Collection<T> extends Iterable<T> {
+    readonly count: int
+    [key: string]: T
+    clear?(): void
+}
+"#,
+    );
+
+    assert_eq!(out.program.elements.len(), 5);
+
+    // Function with nested local function declaration inside block
+    let SourceElement::Decl(fn_decl) = &out.program.elements[0] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Function(f) = &fn_decl.kind else {
+        panic!("expected Function");
+    };
+    assert!(f.is_async);
+    assert!(f.type_parameters.is_some());
+    assert!(f.params.rest.is_some());
+    let body = f.body.as_ref().expect("function body");
+    assert!(matches!(body.statements[0].kind, StmtKind::Decl(_)));
+
+    // Bodyless function declaration
+    assert!(matches!(
+        &out.program.elements[1],
+        SourceElement::Decl(d) if matches!(d.kind, DeclKind::Function(ref fd) if fd.body.is_none())
+    ));
+
+    // Struct with attributes, fields, constructor, method
+    let SourceElement::Decl(st_decl) = &out.program.elements[2] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Struct(st) = &st_decl.kind else {
+        panic!("expected Struct");
+    };
+    assert_eq!(st.attributes.len(), 2);
+    assert!(matches!(st.attributes[0].input, AttributeInput::Args(_)));
+    assert_eq!(st.members.len(), 4);
+    assert!(matches!(st.members[0], StructMember::Field(_)));
+    assert!(matches!(st.members[1], StructMember::Field(ref f) if f.is_static));
+    assert!(matches!(st.members[2], StructMember::Constructor(_)));
+    assert!(matches!(st.members[3], StructMember::Method(_)));
+
+    // Class with private `#token`, `get`/`set` accessors, AND regular `get()` method
+    let SourceElement::Decl(cls_decl) = &out.program.elements[3] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Class(cls) = &cls_decl.kind else {
+        panic!("expected Class");
+    };
+    assert!(cls.extends.is_some());
+    assert_eq!(cls.implements.len(), 2);
+    assert_eq!(cls.members.len(), 5);
+    assert!(matches!(
+        &cls.members[0],
+        ClassMember::Field(f) if matches!(f.name, ClassElementName::Private(_))
+    ));
+    assert!(matches!(
+        &cls.members[1],
+        ClassMember::GetterSetter(gs) if gs.kind == AccessorKind::Get
+    ));
+    assert!(matches!(
+        &cls.members[2],
+        ClassMember::GetterSetter(gs) if gs.kind == AccessorKind::Set && matches!(gs.name, ClassElementName::Private(_))
+    ));
+    assert!(matches!(
+        &cls.members[3],
+        ClassMember::Method(m) if matches!(m.name, ClassElementName::Ident(ref id) if id.as_str() == "get")
+    ));
+
+    // Interface
+    let SourceElement::Decl(if_decl) = &out.program.elements[4] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Interface(iface) = &if_decl.kind else {
+        panic!("expected Interface");
+    };
+    assert_eq!(iface.extends.len(), 1);
+    assert_eq!(iface.members.len(), 3);
+    assert!(matches!(iface.members[0], InterfaceMember::Property(_)));
+    assert!(matches!(iface.members[1], InterfaceMember::Index(_)));
+    assert!(matches!(iface.members[2], InterfaceMember::Method(ref m) if m.is_optional));
+}
+
+#[test]
+fn test_enum_type_alias_and_ffi_declarations() {
+    let out = parse_program_ok(
+        r#"
+enum WebEvent<T> {
+    PageLoad,
+    KeyPress(char),
+    Click(x: int, y: int),
+    Message(string),
+    Custom(T),
+}
+
+enum Flags : uint {
+    Read = 1,
+    Write = 2,
+}
+
+type Handler<T = int> = (event: T) => void
+
+#[link(name = "sqlite3")]
+extern "C" {
+    #[link_name = "sqlite3_open"]
+    function sqliteOpen(filename: *const ubyte, ppDb: *rawptr): int
+    function printf(fmt: *const ubyte, ...): int
+    let errno: int
+    const stdout: rawptr
+}
+
+export extern "C" function kyanos_sum_ints(count: int, ...args: VaList): int {
+    return count
+}
+
+extern "C" function puts(s: *const ubyte): int
+"#,
+    );
+
+    assert_eq!(out.program.elements.len(), 6);
+
+    // Enum ADT with unnamed and named payloads
+    let SourceElement::Decl(e1_decl) = &out.program.elements[0] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Enum(e1) = &e1_decl.kind else {
+        panic!("expected Enum");
+    };
+    assert_eq!(e1.variants.len(), 5);
+    assert!(matches!(
+        &e1.variants[0],
+        EnumVariant::Value { value: None, .. }
+    ));
+    assert!(matches!(
+        &e1.variants[1],
+        EnumVariant::Tuple { payload, .. } if payload.len() == 1 && payload[0].name.is_none()
+    ));
+    assert!(matches!(
+        &e1.variants[2],
+        EnumVariant::Tuple { payload, .. } if payload.len() == 2 && payload[0].name.is_some()
+    ));
+    assert!(matches!(
+        &e1.variants[4],
+        EnumVariant::Tuple { payload, .. } if payload.len() == 1 && payload[0].name.is_none()
+    ));
+
+    // Tag-typed numeric enum
+    assert!(matches!(
+        &out.program.elements[1],
+        SourceElement::Decl(d) if matches!(d.kind, DeclKind::Enum(ref e) if e.tag_type == Some(PredefinedType::Uint))
+    ));
+
+    // Type alias
+    assert!(matches!(
+        &out.program.elements[2],
+        SourceElement::Decl(d) if matches!(d.kind, DeclKind::TypeAlias(_))
+    ));
+
+    // Extern block with variadic `...` and variables
+    let SourceElement::Decl(ext_blk_decl) = &out.program.elements[3] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::ExternBlock(blk) = &ext_blk_decl.kind else {
+        panic!("expected ExternBlock");
+    };
+    assert_eq!(blk.abi.value, "C");
+    assert_eq!(blk.members.len(), 4);
+    assert!(matches!(
+        &blk.members[1],
+        ExternMember::Function(f) if f.params.is_variadic && f.params.rest.is_none()
+    ));
+    assert!(matches!(
+        &blk.members[2],
+        ExternMember::Variable(v) if !v.is_const
+    ));
+    assert!(matches!(
+        &blk.members[3],
+        ExternMember::Variable(v) if v.is_const
+    ));
+
+    // Exported extern function with `...args: VaList`
+    let SourceElement::Export(exp) = &out.program.elements[4] else {
+        panic!("expected Export");
+    };
+    assert!(matches!(
+        &exp.kind,
+        ExportKind::Decl(d) if matches!(
+            d.kind,
+            DeclKind::SingleExtern(ref se) if !se.params.is_variadic && se.params.rest.is_some() && se.body.is_some()
+        )
+    ));
+
+    // Bodyless single extern declaration
+    assert!(matches!(
+        &out.program.elements[5],
+        SourceElement::Decl(d) if matches!(d.kind, DeclKind::SingleExtern(ref se) if se.body.is_none())
+    ));
+}
+
+#[test]
+fn test_end_to_end_kyanos_showcase_and_recovery() {
+    let showcase = r#"
+import { println } from "std/io"
+
+struct Point {
+    x: double
+    y: double
+}
+
+export function main(): int {
+    const origin = Point { x: 0.0, y: 0.0 }
+    let config = { "host": "localhost", "port": "8080" }
+    let host: string = config.host ?? "127.0.0.1"
+    let label = `Host=${host}, X=${origin.x}`
+
+    let nums: int[] = [1, 2, 3]
+    let doubled = nums.map((x) => x * 2)
+
+    let status = switch (doubled[0]) {
+        case 2 => "ok",
+        default => "other",
+    }
+
+    println(`${label}: ${status}`)
+    return 0
+}
+"#;
+    let out = parse_program_ok(showcase);
+    assert_eq!(out.program.elements.len(), 3);
+
+    // Top-level `parse_expr` helper checks trailing tokens.
+    let (expr, errs) = parse_expr("1 + 2 * 3");
+    assert!(errs.is_empty());
+    assert!(matches!(expr.kind, ExprKind::Binary { .. }));
+
+    let (_, trailing_errs) = parse_expr("1 + 2 foo");
+    assert_eq!(trailing_errs.len(), 1);
+
+    // Top-level recovery across stray `}` and broken declaration preserves later functions.
+    let broken = "}\nfunction broken( {\n}\nfunction recovered(): int {\n    return 42\n}\n";
+    let res = parse(broken);
+    assert!(res.has_errors());
+    assert!(res.program.elements.iter().any(|el| matches!(
+        el,
+        SourceElement::Decl(d) if matches!(d.kind, DeclKind::Function(ref f) if f.name.as_str() == "recovered")
+    )));
 }

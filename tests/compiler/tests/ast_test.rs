@@ -11,13 +11,13 @@ use kyanos_ast::{
     AnonymousStructMethod, Argument, ArrayElement, ArraySize, ArrowBody, AssignOp, Associativity,
     Attribute, AttributeArg, AttributeInput, BinaryOp, BindingTarget, Block, CStringLiteral,
     ClassDecl, ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl,
-    DeclKind, EnumDecl, EnumVariant, ExportKind, ExportSpecifier, ExportStmt, Expr, ExprKind,
-    ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList, ForInit,
-    ForIterationKind, ForStmt, FunctionDecl, FunctionType, FunctionTypeParam, GetterSetterDecl,
-    Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature, InterfaceDecl,
-    InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt, Literal, LiteralKind,
-    LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp, Parameter,
-    ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    DeclKind, EnumDecl, EnumPayloadField, EnumVariant, ExportKind, ExportSpecifier, ExportStmt,
+    Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList,
+    ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType, FunctionTypeParam,
+    GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature,
+    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt, Literal,
+    LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp,
+    Parameter, ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
     PrivateIdent, Program, PropertyName, Radix, RestParameter, ReturnType, SingleExternDecl,
     SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral, StructDecl, StructField,
     StructFieldInit, StructFieldPattern, StructMember, SwitchCase, SwitchExprArm,
@@ -1472,16 +1472,11 @@ fn test_enum_type_alias_and_ffi_declarations() {
     // enum Event { KeyPress(char), Quit = 0 }
     let v1 = EnumVariant::Tuple {
         name: Ident::new("KeyPress", Span::new(13, 21)),
-        payload: ParameterList::new(
-            vec![Parameter::simple(
-                Ident::new("ch", Span::new(22, 24)),
-                Some(Type::predefined(PredefinedType::Char, Span::new(26, 30))),
-                Span::new(22, 30),
-            )],
-            None,
-            Span::new(21, 31),
-        ),
-        span: Span::new(13, 31),
+        payload: vec![EnumPayloadField::unnamed(Type::predefined(
+            PredefinedType::Char,
+            Span::new(22, 26),
+        ))],
+        span: Span::new(13, 27),
     };
     let v2 = EnumVariant::Value {
         name: Ident::new("Quit", Span::new(33, 37)),

@@ -18,10 +18,11 @@ pub mod types;
 pub use decl::{
     Accessibility, AccessorKind, Attribute, AttributeArg, AttributeInput, ClassDecl,
     ClassElementName, ClassField, ClassMember, ClassMethod, ConstructorDecl, Decl, DeclKind,
-    EnumDecl, EnumVariant, ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList,
-    ExternVariableDecl, FunctionDecl, GetterSetterDecl, IndexSignature, InterfaceDecl,
-    InterfaceMember, InterfaceMethod, InterfaceProperty, MethodDecl, Parameter, ParameterList,
-    RestParameter, SingleExternDecl, StructDecl, StructField, StructMember, TypeAliasDecl,
+    EnumDecl, EnumPayloadField, EnumVariant, ExternBlockDecl, ExternFunctionDecl, ExternMember,
+    ExternParameterList, ExternVariableDecl, FunctionDecl, GetterSetterDecl, IndexSignature,
+    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, MethodDecl, Parameter,
+    ParameterList, RestParameter, SingleExternDecl, StructDecl, StructField, StructMember,
+    TypeAliasDecl,
 };
 
 pub use expr::{

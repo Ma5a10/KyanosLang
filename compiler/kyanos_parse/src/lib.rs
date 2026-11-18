@@ -17,11 +17,36 @@ pub mod stmt;
 pub mod stream;
 pub mod types;
 
-use kyanos_ast::{NodeId, Program, Span};
+use kyanos_ast::{Expr, NodeId, Program, Span};
 use kyanos_lexer::{Token, TokenKind};
 
 pub use error::{ParseError, ParseErrorKind, ParseResult};
 pub use stream::{Checkpoint, TokenStream};
+
+/// Parses a complete Kyanos compilation unit from source text.
+pub fn parse(source: &str) -> ParseOutput {
+    let mut parser = Parser::new(source);
+    let program = parser.parse_program();
+    ParseOutput {
+        program,
+        errors: parser.take_errors(),
+    }
+}
+
+/// Parses a single expression from source text, returning any recovered node and diagnostics.
+pub fn parse_expr(source: &str) -> (Expr, Vec<ParseError>) {
+    let mut parser = Parser::new(source);
+    let expr = parser.parse_expr_with_recovery();
+    if !parser.is_eof() {
+        let trailing = parser.current();
+        parser.report_error(ParseError::unexpected(
+            "end of expression",
+            trailing.kind,
+            trailing.span,
+        ));
+    }
+    (expr, parser.take_errors())
+}
 
 /// Complete output of parsing a Kyanos compilation unit.
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +107,13 @@ impl<'a> Parser<'a> {
             eos_allows_else: false,
             eos_allows_while: false,
         }
+    }
+
+    /// Parses an entire Kyanos compilation unit into a [`Program`] AST.
+    ///
+    /// Any syntax diagnostics encountered during parsing are recorded in [`Self::errors`].
+    pub fn parse_program(&mut self) -> Program {
+        self.parse_program_inner()
     }
 
     /// Returns all accumulated parse and lexer diagnostics.
@@ -322,6 +354,16 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         self.synchronize();
+    }
+
+    /// Synchronizes after an error, forcing at least one token advance only if the parser
+    /// has not moved past `start_cursor` (preserving newline-aligned next declarations).
+    pub(crate) fn synchronize_from(&mut self, start_cursor: usize) {
+        if self.checkpoint().cursor > start_cursor {
+            self.synchronize();
+        } else {
+            self.advance_and_synchronize();
+        }
     }
 
     /// Synchronizes after a failed `parse_eos()` call, advancing past `;` or until the

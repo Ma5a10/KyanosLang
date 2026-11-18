@@ -295,8 +295,12 @@ enumDeclaration:
 enumVariantList: enumVariant (Comma enumVariant)* Comma?;
 
 enumVariant:
-	Identifier OpenParen parameterList? CloseParen // Variant with payload, e.g. KeyPress(char)
+	Identifier OpenParen enumPayloadList? CloseParen // Variant with payload, e.g. KeyPress(char), Click(x: int, y: int)
 	| Identifier (Assign singleExpression)?; // Simple numeric/unit variant, e.g. PageLoad, Ok = 200
+
+enumPayloadList: enumPayloadField (Comma enumPayloadField)* Comma?;
+
+enumPayloadField: (Identifier Colon)? type_;
 
 // =============================================================================
 // Type Alias Declaration
