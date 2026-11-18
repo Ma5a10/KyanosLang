@@ -9,13 +9,45 @@
 //! Phase 2 provides `parse_parameter_list` for arrow functions and object methods.
 //! Phase 5 expands this module with full declarations, attributes, FFI, and modules.
 
-use kyanos_ast::{Accessibility, Ident, Parameter, ParameterList, RestParameter};
+use kyanos_ast::{Accessibility, Decl, Ident, Parameter, ParameterList, RestParameter};
 use kyanos_lexer::TokenKind;
 
-use crate::error::ParseResult;
+use crate::error::{ParseError, ParseResult};
 use crate::Parser;
 
 impl<'a> Parser<'a> {
+    /// Returns `true` if the current token begins a non-variable declaration
+    /// (`#[...]`, `function`, `async function`, `struct`, `class`, `interface`,
+    /// `enum`, `type`, or `extern`).
+    #[inline]
+    pub(crate) fn at_declaration_start(&self) -> bool {
+        match self.current_kind() {
+            TokenKind::HashBracket
+            | TokenKind::Function
+            | TokenKind::Struct
+            | TokenKind::Class
+            | TokenKind::Interface
+            | TokenKind::Enum
+            | TokenKind::Type
+            | TokenKind::Extern => true,
+            TokenKind::Async => self.peek_kind(1) == TokenKind::Function,
+            _ => false,
+        }
+    }
+
+    /// Parses a declaration.
+    ///
+    /// TODO(Phase 5): Implement full declaration, attribute, and FFI parsing.
+    pub fn parse_decl(&mut self) -> ParseResult<Decl> {
+        let tok = self.current();
+        Err(ParseError::syntax(
+            format!(
+                "Declaration starting with {:?} is not yet implemented (Phase 5)",
+                tok.kind
+            ),
+            tok.span,
+        ))
+    }
     /// Parses a parenthesized parameter list: `(param1, param2, ...rest)`.
     pub fn parse_parameter_list(&mut self) -> ParseResult<ParameterList> {
         let open = self.expect(TokenKind::OpenParen, "'('")?;

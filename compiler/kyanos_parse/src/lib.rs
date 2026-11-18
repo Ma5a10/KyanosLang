@@ -44,6 +44,10 @@ pub struct Parser<'a> {
     next_node_id: u32,
     /// Nesting depth of `(...)` and `[...]` groupings allowing multiline expressions.
     pub(crate) grouping_depth: u32,
+    /// Allows `else` to terminate an immediately enclosed braceless `if` then-branch.
+    pub(crate) eos_allows_else: bool,
+    /// Allows `while` to terminate an immediately enclosed braceless `do` body.
+    pub(crate) eos_allows_while: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -63,6 +67,8 @@ impl<'a> Parser<'a> {
             errors,
             next_node_id: start_node_id,
             grouping_depth: 0,
+            eos_allows_else: false,
+            eos_allows_while: false,
         }
     }
 
@@ -73,6 +79,8 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             next_node_id: 0,
             grouping_depth: 0,
+            eos_allows_else: false,
+            eos_allows_while: false,
         }
     }
 
@@ -268,15 +276,20 @@ impl<'a> Parser<'a> {
     ///
     /// Succeeds when:
     /// 1. An explicit `;` is present (consumed),
-    /// 2. The next token is `}` or `EOF` (not consumed), or
-    /// 3. The next token was preceded by one or more line terminators (not consumed).
+    /// 2. The next token is `}` or `EOF` (not consumed),
+    /// 3. The next token is `else` / `while` closing a braceless `if` / `do` branch, or
+    /// 4. The next token was preceded by one or more line terminators (not consumed).
     pub fn parse_eos(&mut self) -> ParseResult<()> {
         if self.eat(TokenKind::Semicolon).is_some() {
             return Ok(());
         }
 
         let tok = self.current();
-        if matches!(tok.kind, TokenKind::CloseBrace | TokenKind::Eof) || tok.has_leading_newline {
+        if matches!(tok.kind, TokenKind::CloseBrace | TokenKind::Eof)
+            || tok.has_leading_newline
+            || (self.eos_allows_else && tok.kind == TokenKind::Else)
+            || (self.eos_allows_while && tok.kind == TokenKind::While)
+        {
             return Ok(());
         }
 
@@ -331,7 +344,7 @@ impl<'a> Parser<'a> {
 /// Returns `true` if `kind` unambiguously starts a top-level declaration or statement
 /// when preceded by a line break, making it a safe synchronization point.
 #[inline]
-fn is_sync_start_keyword(kind: TokenKind) -> bool {
+pub(crate) fn is_sync_start_keyword(kind: TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Import

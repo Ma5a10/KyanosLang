@@ -5,11 +5,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use kyanos_ast::{
-    AnonymousStructMember, ArraySize, ArrowBody, AssignOp, BinaryOp, BindingTarget, Expr, ExprKind,
-    LiteralKind, LiteralSign, MemberProperty, NodeId, ObjectMember, ObjectPatternProp, Pattern,
-    PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PropertyName, Radix, ReturnType,
-    SizeofTarget, Span, StmtKind, StructFieldInit, StructFieldPattern, SwitchExprArm,
-    TemplateStringPart, Type, TypeKind, VarModifier,
+    AnonymousStructMember, ArraySize, ArrowBody, AssignOp, BinaryOp, BindingTarget, Block, Expr,
+    ExprKind, ForInit, ForIterationKind, ForStmt, LiteralKind, LiteralSign, MemberProperty, NodeId,
+    ObjectMember, ObjectPatternProp, Pattern, PatternKind, PostfixUnaryOp, PredefinedType,
+    PrefixUnaryOp, PropertyName, Radix, ReturnType, SizeofTarget, Span, Stmt, StmtKind,
+    StructFieldInit, StructFieldPattern, SwitchCase, SwitchExprArm, TemplateStringPart, Type,
+    TypeKind, VarModifier,
 };
 use kyanos_lexer::TokenKind;
 use kyanos_parse::{ParseError, ParseErrorKind, Parser};
@@ -1087,5 +1088,243 @@ fn test_patterns_and_binding_targets() {
     assert!(matches!(
         bt,
         BindingTarget::Tuple { ref elements, .. } if elements.len() == 3
+    ));
+}
+
+// =============================================================================
+// Phase 4: Statement & Control-Flow Parser Tests
+// =============================================================================
+
+fn parse_stmt_ok(source: &str) -> Stmt {
+    let mut parser = Parser::new(source);
+    let stmt = parser.parse_stmt().expect("statement should parse");
+    assert!(
+        parser.errors().is_empty(),
+        "unexpected parse errors for stmt `{}`: {:?}",
+        source,
+        parser.errors()
+    );
+    assert!(
+        parser.is_eof(),
+        "expected EOF after stmt `{}`, found {:?}",
+        source,
+        parser.current()
+    );
+    stmt
+}
+
+fn parse_block_ok(source: &str) -> Block {
+    let mut parser = Parser::new(source);
+    let block = parser.parse_block().expect("block should parse");
+    assert!(
+        parser.errors().is_empty(),
+        "unexpected parse errors for block `{}`: {:?}",
+        source,
+        parser.errors()
+    );
+    assert!(
+        parser.is_eof(),
+        "expected EOF after block `{}`, found {:?}",
+        source,
+        parser.current()
+    );
+    block
+}
+
+#[test]
+fn test_variable_and_using_statements() {
+    let block = parse_block_ok(
+        "{\n let x: int = 10, y = 20\n let uninit\n const [a, b] = tuple; const { k, v: renamed } = obj\n using db: SafeDb = openDb(\"test.db\")\n}",
+    );
+    assert_eq!(block.statements.len(), 5);
+
+    assert!(matches!(
+        &block.statements[0].kind,
+        StmtKind::Variable(v) if v.modifier == VarModifier::Let && v.declarations.len() == 2
+    ));
+    assert!(matches!(
+        &block.statements[1].kind,
+        StmtKind::Variable(v) if v.declarations[0].init.is_none()
+    ));
+    assert!(matches!(
+        &block.statements[2].kind,
+        StmtKind::Variable(v) if v.modifier == VarModifier::Const && matches!(v.declarations[0].target, BindingTarget::Tuple { .. })
+    ));
+    assert!(matches!(
+        &block.statements[3].kind,
+        StmtKind::Variable(v) if v.modifier == VarModifier::Const && matches!(v.declarations[0].target, BindingTarget::Object { .. })
+    ));
+    assert!(matches!(
+        &block.statements[4].kind,
+        StmtKind::Using(u) if u.name.as_str() == "db" && u.ty.is_some()
+    ));
+
+    // `const` without initializer emits MissingInitializer while returning partial VariableStmt.
+    let mut missing_const = Parser::new("const bad");
+    let stmt = missing_const.parse_stmt().unwrap();
+    assert!(matches!(stmt.kind, StmtKind::Variable(_)));
+    assert_eq!(missing_const.errors().len(), 1);
+    assert_eq!(
+        missing_const.errors()[0].kind,
+        ParseErrorKind::MissingInitializer
+    );
+}
+
+#[test]
+fn test_if_dangling_else_while_and_do_while() {
+    // Dangling else binds to the innermost `if`.
+    let nested_if = parse_stmt_ok("if (a) if (b) x = 1 else x = 2");
+    let StmtKind::If(outer) = nested_if.kind else {
+        panic!("expected outer If");
+    };
+    assert!(outer.else_branch.is_none());
+    let StmtKind::If(inner) = outer.then_branch.kind else {
+        panic!("expected inner If");
+    };
+    assert!(inner.else_branch.is_some());
+
+    let while_stmt = parse_stmt_ok("while (cond) { work() }");
+    assert!(matches!(while_stmt.kind, StmtKind::While(_)));
+
+    let do_while = parse_stmt_ok("do { x += 1 } while (x < 10)");
+    assert!(matches!(do_while.kind, StmtKind::DoWhile(_)));
+
+    let braceless_do = parse_stmt_ok("do x += 1 while (x < 10)");
+    assert!(matches!(braceless_do.kind, StmtKind::DoWhile(_)));
+
+    // Outside `if`, `else` on the same line still triggers ExpectedEos.
+    let mut bad_else = Parser::new("x = 1 else");
+    let _ = bad_else.parse_stmt().unwrap();
+    assert_eq!(bad_else.errors().len(), 1);
+    assert_eq!(
+        bad_else.errors()[0].kind,
+        ParseErrorKind::ExpectedEos {
+            found: TokenKind::Else
+        }
+    );
+}
+
+#[test]
+fn test_for_standard_and_iteration_statements() {
+    let std_for = parse_stmt_ok("for (let i = 0; i < 10; i += 1) { sum += i }");
+    assert!(matches!(
+        std_for.kind,
+        StmtKind::For(ForStmt::Standard {
+            init: Some(ForInit::Let(_)),
+            test: Some(_),
+            update: Some(_),
+            ..
+        })
+    ));
+
+    let empty_for = parse_stmt_ok("for (;;) { break }");
+    assert!(matches!(
+        empty_for.kind,
+        StmtKind::For(ForStmt::Standard {
+            init: None,
+            test: None,
+            update: None,
+            ..
+        })
+    ));
+
+    let for_of = parse_stmt_ok("for (const [k, v] of pairs) { usePair(k, v) }");
+    assert!(matches!(
+        for_of.kind,
+        StmtKind::For(ForStmt::Iteration {
+            modifier: VarModifier::Const,
+            target: BindingTarget::Tuple { .. },
+            kind: ForIterationKind::Of,
+            ..
+        })
+    ));
+
+    let for_in = parse_stmt_ok("for (let key in dict) { println(key) }");
+    assert!(matches!(
+        for_in.kind,
+        StmtKind::For(ForStmt::Iteration {
+            modifier: VarModifier::Let,
+            kind: ForIterationKind::In,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_switch_statement_with_patterns_and_guards() {
+    let sw = parse_stmt_ok(
+        "switch (pt) {\n  case Point { x: 0, y: 0 }:\n    println(\"origin\")\n  case Point { x: 0, y: let y } when y > 0:\n    println(y)\n  case _:\n  default:\n    break\n}",
+    );
+    let StmtKind::Switch(s) = sw.kind else {
+        panic!("expected Switch statement");
+    };
+    assert_eq!(s.cases.len(), 4);
+    assert!(matches!(
+        &s.cases[0],
+        SwitchCase::Case {
+            guard: None,
+            body,
+            ..
+        } if body.len() == 1
+    ));
+    assert!(matches!(
+        &s.cases[1],
+        SwitchCase::Case {
+            guard: Some(_),
+            body,
+            ..
+        } if body.len() == 1
+    ));
+    assert!(matches!(
+        &s.cases[2],
+        SwitchCase::Case { body, .. } if body.is_empty()
+    ));
+    assert!(matches!(&s.cases[3], SwitchCase::Default { body, .. } if body.len() == 1));
+}
+
+#[test]
+fn test_jump_defer_unsafe_labeled_newlines_and_recovery() {
+    // 1. Newline after `return` / `break` splits into separate statements.
+    let block = parse_block_ok(
+        "{\n  return\n  x + 1\n  break\n  nextStmt\n  outer: for (let i = 0; i < 3; i += 1) { continue outer }\n  defer unsafe { free(p) }\n  debugger;\n  ;\n  async (x) => await x\n}",
+    );
+    assert_eq!(block.statements.len(), 9);
+    assert!(matches!(
+        block.statements[0].kind,
+        StmtKind::Return(ref r) if r.value.is_none()
+    ));
+    assert!(matches!(block.statements[1].kind, StmtKind::Expr(_)));
+    assert!(matches!(
+        block.statements[2].kind,
+        StmtKind::Break(ref b) if b.label.is_none()
+    ));
+    assert!(matches!(block.statements[3].kind, StmtKind::Expr(_)));
+    assert!(matches!(
+        block.statements[4].kind,
+        StmtKind::Labeled(ref l) if l.label.as_str() == "outer"
+    ));
+    assert!(matches!(
+        block.statements[5].kind,
+        StmtKind::Defer(ref d) if matches!(d.statement.kind, StmtKind::Unsafe(_))
+    ));
+    assert_eq!(block.statements[6].kind, StmtKind::Debugger);
+    assert_eq!(block.statements[7].kind, StmtKind::Empty);
+    assert!(matches!(
+        block.statements[8].kind,
+        StmtKind::Expr(Expr {
+            kind: ExprKind::ArrowFunction { is_async: true, .. },
+            ..
+        })
+    ));
+
+    // 2. Error recovery inside block continues parsing subsequent valid statements.
+    let mut bad_block = Parser::new("{\n  let = 123\n  let ok = 42\n}");
+    let recovered = bad_block.parse_block().unwrap();
+    assert!(!bad_block.errors().is_empty());
+    assert_eq!(recovered.statements.len(), 2);
+    assert_eq!(recovered.statements[0].kind, StmtKind::Error);
+    assert!(matches!(
+        recovered.statements[1].kind,
+        StmtKind::Variable(_)
     ));
 }
