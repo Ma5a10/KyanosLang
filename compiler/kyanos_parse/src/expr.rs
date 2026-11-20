@@ -32,7 +32,7 @@ impl<'a> Parser<'a> {
         match self.parse_expr() {
             Ok(expr) => expr,
             Err(err) => {
-                let span = err.span;
+                let span = err.span();
                 self.report_error(err);
                 let id = self.alloc_id();
                 Expr::error(span).with_id(id)
@@ -51,203 +51,171 @@ impl<'a> Parser<'a> {
 
     /// Core Pratt parser loop with minimum binding power `min_bp`.
     pub(crate) fn parse_expr_bp(&mut self, min_bp: u8) -> ParseResult<Expr> {
+        self.enter_recursion()?;
+        let res = self.parse_expr_bp_inner(min_bp);
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_expr_bp_inner(&mut self, min_bp: u8) -> ParseResult<Expr> {
         let mut lhs = self.parse_prefix_expr()?;
 
-        loop {
-            let tok = self.current();
-
-            // Prevent statement-starting tokens after a line break from unintentionally
-            // continuing the previous expression when outside `(...)` / `[...]`.
-            if self.grouping_depth == 0
-                && tok.has_leading_newline
-                && is_newline_statement_boundary(tok.kind)
-            {
-                break;
-            }
-
-            // 1. Postfix operators (`++`, `--`, `!`)
-            if let Some(post_op) = postfix_op_from_token(tok.kind) {
-                let l_bp = post_op.left_binding_power();
-                if l_bp < min_bp {
-                    break;
-                }
-                self.bump();
-                let span = self.span_from(lhs.span);
-                let id = self.alloc_id();
-                lhs = Expr::unary_postfix(post_op, lhs, span).with_id(id);
-                continue;
-            }
-
-            // 2. Postfix member access, call, index, generic call, and struct instantiation
-            match tok.kind {
-                TokenKind::Dot => {
-                    if precedence::POSTFIX_LEFT_BP < min_bp {
-                        break;
-                    }
-                    self.bump();
-                    let prop = self.parse_member_property()?;
-                    let span = self.span_from(lhs.span);
-                    let id = self.alloc_id();
-                    lhs = Expr::member(lhs, prop, false, span).with_id(id);
-                    continue;
-                }
-                TokenKind::OptionalChain => {
-                    if precedence::POSTFIX_LEFT_BP < min_bp {
-                        break;
-                    }
-                    lhs = self.parse_optional_chain_postfix(lhs)?;
-                    continue;
-                }
-                TokenKind::OpenBracket => {
-                    if precedence::POSTFIX_LEFT_BP < min_bp {
-                        break;
-                    }
-                    lhs = self.parse_index_postfix(lhs, false)?;
-                    continue;
-                }
-                TokenKind::OpenParen => {
-                    if precedence::POSTFIX_LEFT_BP < min_bp {
-                        break;
-                    }
-                    lhs = self.parse_call_postfix(lhs, None)?;
-                    continue;
-                }
-                TokenKind::OpenBrace => {
-                    if precedence::POSTFIX_LEFT_BP < min_bp {
-                        break;
-                    }
-                    if let Some(struct_name) = expr_to_type_name(&lhs) {
-                        lhs = self.parse_struct_instantiation_body(struct_name, None)?;
-                        continue;
-                    }
-                    break;
-                }
-                _ => {}
-            }
-
-            // Note: `?.[` is lexed as `OptionalChain` followed by `OpenBracket`?
-            // Actually `OptionalChain` is `?.`, so `arr?.[i]` has `OptionalChain` then `OpenBracket`!
-            // Wait: handled cleanly in `Dot | OptionalChain` above? Wait: check `OptionalChain`!
-            // If `tok.kind == TokenKind::OptionalChain` and `peek_kind(1) == TokenKind::OpenBracket`,
-            // handle `?.[` before `Member`! (Handled in `parse_member_or_optional_index` below.)
-
-            // 3. Generic call `f<T>(args)` / generic struct instantiation `Pair<T> { ... }`
-            //    versus relational `<` comparison.
-            if tok.kind == TokenKind::LessThan {
-                let (lt_l_bp, _) = BinaryOp::Lt.binding_power();
-                if precedence::POSTFIX_LEFT_BP >= min_bp {
-                    let cp = self.checkpoint();
-                    if let Ok(type_args) = self.parse_type_arguments() {
-                        let next = self.current();
-                        if next.kind == TokenKind::OpenParen
-                            && (self.grouping_depth > 0 || !next.has_leading_newline)
-                        {
-                            lhs = self.parse_call_postfix(lhs, Some(type_args))?;
-                            continue;
-                        }
-                        if next.kind == TokenKind::OpenBrace && !next.has_leading_newline {
-                            if let Some(struct_name) = expr_to_type_name(&lhs) {
-                                lhs = self.parse_struct_instantiation_body(
-                                    struct_name,
-                                    Some(type_args),
-                                )?;
-                                continue;
-                            }
-                        }
-                    }
-                    self.restore(cp);
-                }
-                if lt_l_bp < min_bp {
-                    break;
-                }
-            }
-
-            // 4. Type cast: `expr as Type`
-            if tok.kind == TokenKind::As {
-                if precedence::CAST_LEFT_BP < min_bp {
-                    break;
-                }
-                self.bump();
-                let ty = self.parse_type()?;
-                let span = self.span_from(lhs.span);
-                let id = self.alloc_id();
-                lhs = Expr::cast(lhs, ty, span).with_id(id);
-                continue;
-            }
-
-            // 5. Runtime type test: `expr is Type`
-            if tok.kind == TokenKind::Is {
-                let (l_bp, _) = precedence::TYPE_TEST_BP;
-                if l_bp < min_bp {
-                    break;
-                }
-                self.bump();
-                let ty = self.parse_type()?;
-                let span = self.span_from(lhs.span);
-                let id = self.alloc_id();
-                lhs = Expr::new(
-                    ExprKind::TypeTest {
-                        expr: Box::new(lhs),
-                        ty,
-                    },
-                    span,
-                )
-                .with_id(id);
-                continue;
-            }
-
-            // 6. Binary operators (arithmetic, shift, relational, equality, bitwise, logical, ??)
-            if let Some(bin_op) = binary_op_from_token(tok.kind) {
-                let (l_bp, r_bp) = bin_op.binding_power();
-                if l_bp < min_bp {
-                    break;
-                }
-                self.bump();
-                let rhs = self.parse_expr_bp(r_bp)?;
-                let id = self.alloc_id();
-                lhs = Expr::binary(bin_op, lhs, rhs).with_id(id);
-                continue;
-            }
-
-            // 7. Ternary conditional: `cond ? then_expr : else_expr`
-            if tok.kind == TokenKind::Question {
-                let (l_bp, r_bp) = precedence::TERNARY_BP;
-                if l_bp < min_bp {
-                    break;
-                }
-                self.bump(); // consume '?'
-                let then_expr = self.parse_expr()?;
-                self.expect(TokenKind::Colon, "':'")?;
-                let else_expr = self.parse_expr_bp(r_bp)?;
-                let id = self.alloc_id();
-                lhs = Expr::ternary(lhs, then_expr, else_expr).with_id(id);
-                continue;
-            }
-
-            // 8. Assignment operators: `lhs = rhs`, `lhs += rhs`, etc.
-            if let Some(assign_op) = assign_op_from_token(tok.kind) {
-                let (l_bp, r_bp) = assign_op.binding_power();
-                if l_bp < min_bp {
-                    break;
-                }
-                if !is_valid_assignment_target(&lhs) {
-                    self.report_error(ParseError::new(
-                        ParseErrorKind::InvalidAssignmentTarget,
-                        lhs.span,
-                        "Invalid left-hand side in assignment expression",
-                    ));
-                }
-                self.bump();
-                let rhs = self.parse_expr_bp(r_bp)?;
-                let id = self.alloc_id();
-                lhs = Expr::assign(assign_op, lhs, rhs).with_id(id);
-                continue;
-            }
-
-            break;
-        }
+        while self.step_led(&mut lhs, min_bp)? {}
 
         Ok(lhs)
+    }
+
+    #[inline(never)]
+    fn step_led(&mut self, lhs: &mut Expr, min_bp: u8) -> ParseResult<bool> {
+        let tok = self.current();
+
+        // Prevent statement-starting tokens after a line break from unintentionally
+        // continuing the previous expression when outside `(...)` / `[...]`.
+        if self.grouping_depth == 0
+            && tok.has_leading_newline
+            && is_newline_statement_boundary(tok.kind)
+        {
+            return Ok(false);
+        }
+
+        // 1. Postfix operators (`++`, `--`, `!`)
+        if let Some(post_op) = postfix_op_from_token(tok.kind) {
+            let l_bp = post_op.left_binding_power();
+            if l_bp < min_bp {
+                return Ok(false);
+            }
+            self.bump();
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            let span = self.span_from(prev.span);
+            let id = self.alloc_id();
+            *lhs = Expr::unary_postfix(post_op, prev, span).with_id(id);
+            return Ok(true);
+        }
+
+        // 2. Postfix member access, call, index, generic call, and struct instantiation
+        match tok.kind {
+            TokenKind::Dot => {
+                if precedence::POSTFIX_LEFT_BP < min_bp {
+                    return Ok(false);
+                }
+                self.bump();
+                let prop = self.parse_member_property()?;
+                let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+                let span = self.span_from(prev.span);
+                let id = self.alloc_id();
+                *lhs = Expr::member(prev, prop, false, span).with_id(id);
+                return Ok(true);
+            }
+            TokenKind::OptionalChain => {
+                if precedence::POSTFIX_LEFT_BP < min_bp {
+                    return Ok(false);
+                }
+                let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+                *lhs = self.parse_optional_chain_postfix(prev)?;
+                return Ok(true);
+            }
+            TokenKind::OpenBracket => {
+                if precedence::POSTFIX_LEFT_BP < min_bp {
+                    return Ok(false);
+                }
+                let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+                *lhs = self.parse_index_postfix(prev, false)?;
+                return Ok(true);
+            }
+            TokenKind::OpenParen => {
+                if precedence::POSTFIX_LEFT_BP < min_bp {
+                    return Ok(false);
+                }
+                let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+                *lhs = self.parse_call_postfix(prev, None)?;
+                return Ok(true);
+            }
+            TokenKind::OpenBrace => {
+                if precedence::POSTFIX_LEFT_BP < min_bp {
+                    return Ok(false);
+                }
+                if let Some(struct_name) = expr_to_type_name(lhs) {
+                    *lhs = self.parse_struct_instantiation_body(struct_name, None)?;
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            _ => {}
+        }
+
+        // 3. Generic call `f<T>(args)` / generic struct instantiation `Pair<T> { ... }`
+        //    versus relational `<` comparison.
+        if tok.kind == TokenKind::LessThan {
+            let (lt_l_bp, _) = BinaryOp::Lt.binding_power();
+            if precedence::POSTFIX_LEFT_BP >= min_bp {
+                if let Some(next_lhs) = self.try_parse_generic_postfix(lhs)? {
+                    *lhs = next_lhs;
+                    return Ok(true);
+                }
+            }
+            if lt_l_bp < min_bp {
+                return Ok(false);
+            }
+        }
+
+        // 4. Type cast: `expr as Type`
+        if tok.kind == TokenKind::As {
+            if precedence::CAST_LEFT_BP < min_bp {
+                return Ok(false);
+            }
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            *lhs = self.parse_cast_postfix(prev)?;
+            return Ok(true);
+        }
+
+        // 5. Runtime type test: `expr is Type`
+        if tok.kind == TokenKind::Is {
+            let (l_bp, _) = precedence::TYPE_TEST_BP;
+            if l_bp < min_bp {
+                return Ok(false);
+            }
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            *lhs = self.parse_type_test_postfix(prev)?;
+            return Ok(true);
+        }
+
+        // 6. Binary operators (arithmetic, shift, relational, equality, bitwise, logical, ??)
+        if let Some(bin_op) = binary_op_from_token(tok.kind) {
+            let (l_bp, r_bp) = bin_op.binding_power();
+            if l_bp < min_bp {
+                return Ok(false);
+            }
+            self.bump();
+            let rhs = self.parse_expr_bp(r_bp)?;
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            let id = self.alloc_id();
+            *lhs = Expr::binary(bin_op, prev, rhs).with_id(id);
+            return Ok(true);
+        }
+
+        // 7. Ternary conditional: `cond ? then_expr : else_expr`
+        if tok.kind == TokenKind::Question {
+            let (l_bp, r_bp) = precedence::TERNARY_BP;
+            if l_bp < min_bp {
+                return Ok(false);
+            }
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            *lhs = self.parse_ternary_postfix(prev, r_bp)?;
+            return Ok(true);
+        }
+
+        // 8. Assignment operators: `lhs = rhs`, `lhs += rhs`, etc.
+        if let Some(assign_op) = assign_op_from_token(tok.kind) {
+            let (l_bp, r_bp) = assign_op.binding_power();
+            if l_bp < min_bp {
+                return Ok(false);
+            }
+            let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
+            *lhs = self.parse_assign_postfix(assign_op, prev, r_bp)?;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     /// Parses a prefix / primary expression (`nud`).
@@ -256,24 +224,12 @@ impl<'a> Parser<'a> {
 
         // Predefined primitive type member access: `string.fromCString(...)`, `int.MAX_VALUE`
         if let Some(pt) = token_to_predefined_type(tok.kind) {
-            self.bump();
-            self.expect(TokenKind::Dot, "'.'")?;
-            let member_tok = self.expect(TokenKind::Identifier, "member identifier")?;
-            let member = Ident::new(self.slice(member_tok.span), member_tok.span);
-            let span = self.span_from(tok.span);
-            let id = self.alloc_id();
-            return Ok(
-                Expr::new(ExprKind::PredefinedTypeMember { ty: pt, member }, span).with_id(id),
-            );
+            return self.parse_predefined_type_member_expr(pt, tok.span);
         }
 
         // Prefix unary operators
-        if let Some(prefix_op) = prefix_op_from_token(tok.kind) {
-            self.bump();
-            let target = self.parse_expr_bp(prefix_op.right_binding_power())?;
-            let span = self.span_from(tok.span);
-            let id = self.alloc_id();
-            return Ok(Expr::unary_prefix(prefix_op, target, span).with_id(id));
+        if prefix_op_from_token(tok.kind).is_some() {
+            return self.parse_prefix_unary_chain();
         }
 
         match tok.kind {
@@ -308,14 +264,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Identifier => {
                 if self.peek_kind(1) == TokenKind::Arrow {
-                    let ident_tok = self.bump();
-                    let ident = Ident::new(self.slice(ident_tok.span), ident_tok.span);
-                    let params = ParameterList::new(
-                        vec![Parameter::simple(ident, None, ident_tok.span)],
-                        None,
-                        ident_tok.span,
-                    );
-                    return self.finish_arrow_function(ident_tok.span, false, None, params, None);
+                    return self.parse_single_ident_arrow_expr();
                 }
                 self.bump();
                 let ident = Ident::new(self.slice(tok.span), tok.span);
@@ -335,9 +284,147 @@ impl<'a> Parser<'a> {
         }
     }
 
+    #[inline(never)]
+    fn parse_predefined_type_member_expr(
+        &mut self,
+        ty: kyanos_ast::PredefinedType,
+        start: Span,
+    ) -> ParseResult<Expr> {
+        self.bump();
+        self.expect(TokenKind::Dot, "'.'")?;
+        let member_tok = self.expect(TokenKind::Identifier, "member identifier")?;
+        let member = Ident::new(self.slice(member_tok.span), member_tok.span);
+        let span = self.span_from(start);
+        let id = self.alloc_id();
+        Ok(Expr::new(ExprKind::PredefinedTypeMember { ty, member }, span).with_id(id))
+    }
+
+    #[inline(never)]
+    fn parse_single_ident_arrow_expr(&mut self) -> ParseResult<Expr> {
+        let ident_tok = self.bump();
+        let ident = Ident::new(self.slice(ident_tok.span), ident_tok.span);
+        let params = ParameterList::new(
+            vec![Parameter::simple(ident, None, ident_tok.span)],
+            None,
+            ident_tok.span,
+        );
+        self.finish_arrow_function(ident_tok.span, false, None, params, None)
+    }
+
+    /// Parses a chain of prefix unary operators iteratively to keep stack usage O(1) while enforcing `MAX_RECURSION_DEPTH`.
+    fn parse_prefix_unary_chain(&mut self) -> ParseResult<Expr> {
+        let mut ops: Vec<(PrefixUnaryOp, Span)> = Vec::new();
+        while let Some(op) = prefix_op_from_token(self.current_kind()) {
+            if let Err(err) = self.enter_recursion() {
+                for _ in 0..ops.len() {
+                    self.exit_recursion();
+                }
+                return Err(err);
+            }
+            let tok = self.bump();
+            ops.push((op, tok.span));
+        }
+
+        let last_rbp = ops
+            .last()
+            .expect("at least one prefix op")
+            .0
+            .right_binding_power();
+        let res = self.parse_expr_bp(last_rbp);
+        let mut target = match res {
+            Ok(expr) => expr,
+            Err(err) => {
+                for _ in 0..ops.len() {
+                    self.exit_recursion();
+                }
+                return Err(err);
+            }
+        };
+
+        for (op, op_span) in ops.into_iter().rev() {
+            self.exit_recursion();
+            let span = op_span.merge(target.span);
+            let id = self.alloc_id();
+            target = Expr::unary_prefix(op, target, span).with_id(id);
+        }
+        Ok(target)
+    }
+
     // -------------------------------------------------------------------------
     // Postfix Helpers
     // -------------------------------------------------------------------------
+
+    #[inline(never)]
+    fn try_parse_generic_postfix(&mut self, lhs: &Expr) -> ParseResult<Option<Expr>> {
+        let cp = self.checkpoint();
+        if let Ok(type_args) = self.parse_type_arguments() {
+            let next = self.current();
+            if next.kind == TokenKind::OpenParen
+                && (self.grouping_depth > 0 || !next.has_leading_newline)
+            {
+                return self
+                    .parse_call_postfix(lhs.clone(), Some(type_args))
+                    .map(Some);
+            }
+            if next.kind == TokenKind::OpenBrace && !next.has_leading_newline {
+                if let Some(struct_name) = expr_to_type_name(lhs) {
+                    return self
+                        .parse_struct_instantiation_body(struct_name, Some(type_args))
+                        .map(Some);
+                }
+            }
+        }
+        self.restore(cp);
+        Ok(None)
+    }
+
+    #[inline(never)]
+    fn parse_cast_postfix(&mut self, lhs: Expr) -> ParseResult<Expr> {
+        self.bump();
+        let ty = self.parse_type()?;
+        let span = self.span_from(lhs.span);
+        let id = self.alloc_id();
+        Ok(Expr::cast(lhs, ty, span).with_id(id))
+    }
+
+    #[inline(never)]
+    fn parse_type_test_postfix(&mut self, lhs: Expr) -> ParseResult<Expr> {
+        self.bump();
+        let ty = self.parse_type()?;
+        let span = self.span_from(lhs.span);
+        let id = self.alloc_id();
+        Ok(Expr::type_test(lhs, ty, span).with_id(id))
+    }
+
+    #[inline(never)]
+    fn parse_ternary_postfix(&mut self, lhs: Expr, r_bp: u8) -> ParseResult<Expr> {
+        self.bump(); // consume '?'
+        let then_expr = self.parse_expr()?;
+        self.expect(TokenKind::Colon, "':'")?;
+        let else_expr = self.parse_expr_bp(r_bp)?;
+        let id = self.alloc_id();
+        Ok(Expr::ternary(lhs, then_expr, else_expr).with_id(id))
+    }
+
+    #[inline(never)]
+    fn parse_assign_postfix(
+        &mut self,
+        assign_op: AssignOp,
+        lhs: Expr,
+        r_bp: u8,
+    ) -> ParseResult<Expr> {
+        if !is_valid_assignment_target(&lhs) {
+            self.report_error(ParseError::new(
+                ParseErrorKind::InvalidAssignmentTarget,
+                lhs.span,
+                "Invalid left-hand side in assignment expression",
+            ));
+        }
+        self.bump();
+        let rhs = self.parse_expr_bp(r_bp)?;
+        let id = self.alloc_id();
+        Ok(Expr::assign(assign_op, lhs, rhs).with_id(id))
+    }
 
     fn parse_member_property(&mut self) -> ParseResult<MemberProperty> {
         let tok = self.current();
@@ -558,17 +645,10 @@ impl<'a> Parser<'a> {
         };
         let span = self.span_from(start);
         let id = self.alloc_id();
-        Ok(Expr::new(
-            ExprKind::ArrowFunction {
-                is_async,
-                type_parameters,
-                params,
-                return_type,
-                body,
-            },
-            span,
+        Ok(
+            Expr::arrow_function(is_async, type_parameters, params, return_type, body, span)
+                .with_id(id),
         )
-        .with_id(id))
     }
 
     // -------------------------------------------------------------------------
@@ -577,23 +657,29 @@ impl<'a> Parser<'a> {
 
     fn parse_array_literal(&mut self) -> ParseResult<Expr> {
         let open = self.expect(TokenKind::OpenBracket, "'['")?;
-        let elements = self.with_grouping(|p| {
-            let mut elems = Vec::new();
-            while !p.at(TokenKind::CloseBracket) && !p.is_eof() {
-                if let Some(spread_tok) = p.eat(TokenKind::Ellipsis) {
-                    let expr = p.parse_expr()?;
-                    let span = p.span_from(spread_tok.span);
-                    elems.push(ArrayElement::spread(expr, span));
-                } else {
-                    let expr = p.parse_expr()?;
-                    elems.push(ArrayElement::normal(expr));
-                }
-                if p.eat(TokenKind::Comma).is_none() {
-                    break;
+        self.grouping_depth += 1;
+        let mut elements = Vec::new();
+        while !self.at(TokenKind::CloseBracket) && !self.is_eof() {
+            let elem_res = if let Some(spread_tok) = self.eat(TokenKind::Ellipsis) {
+                self.parse_expr_bp(0).map(|expr| {
+                    let span = self.span_from(spread_tok.span);
+                    ArrayElement::spread(expr, span)
+                })
+            } else {
+                self.parse_expr_bp(0).map(ArrayElement::normal)
+            };
+            match elem_res {
+                Ok(elem) => elements.push(elem),
+                Err(err) => {
+                    self.grouping_depth -= 1;
+                    return Err(err);
                 }
             }
-            Ok::<_, ParseError>(elems)
-        })?;
+            if self.eat(TokenKind::Comma).is_none() {
+                break;
+            }
+        }
+        self.grouping_depth -= 1;
         self.expect(TokenKind::CloseBracket, "']'")?;
         let span = self.span_from(open.span);
         let id = self.alloc_id();
@@ -768,15 +854,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::CloseBrace, "'}'")?;
         let span = self.span_from(start);
         let id = self.alloc_id();
-        Ok(Expr::new(
-            ExprKind::StructInstantiation {
-                struct_name,
-                type_arguments,
-                fields,
-            },
-            span,
-        )
-        .with_id(id))
+        Ok(Expr::struct_instantiation(struct_name, type_arguments, fields, span).with_id(id))
     }
 
     fn parse_switch_expr(&mut self) -> ParseResult<Expr> {
@@ -853,7 +931,7 @@ impl<'a> Parser<'a> {
             let cp = p.checkpoint();
             if let Ok(ty) = p.parse_type() {
                 if p.at(TokenKind::CloseParen) {
-                    return Ok(SizeofTarget::Type(ty));
+                    return Ok(SizeofTarget::Type(Box::new(ty)));
                 }
             }
             p.restore(cp);
@@ -920,15 +998,7 @@ impl<'a> Parser<'a> {
 
         let span = self.span_from(new_tok.span);
         let id = self.alloc_id();
-        Ok(Expr::new(
-            ExprKind::New {
-                callee: Box::new(callee),
-                type_arguments,
-                args,
-            },
-            span,
-        )
-        .with_id(id))
+        Ok(Expr::new_expr(callee, type_arguments, args, span).with_id(id))
     }
 
     fn parse_new_callee_base(&mut self) -> ParseResult<Expr> {

@@ -18,6 +18,13 @@ use crate::Parser;
 impl<'a> Parser<'a> {
     /// Parses a `{ ... }` block containing declarations and statements.
     pub fn parse_block(&mut self) -> ParseResult<Block> {
+        self.enter_recursion()?;
+        let res = self.parse_block_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_block_inner(&mut self) -> ParseResult<Block> {
         let open = self.expect(TokenKind::OpenBrace, "'{'")?;
         let prev_else = self.eos_allows_else;
         let prev_while = self.eos_allows_while;
@@ -26,26 +33,8 @@ impl<'a> Parser<'a> {
 
         let mut statements = Vec::new();
         while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            let start_cursor = self.checkpoint().cursor;
-            let parsed = if self.at_declaration_start() {
-                self.parse_decl().map(|decl| {
-                    let id = self.alloc_id();
-                    Stmt::decl(decl).with_id(id)
-                })
-            } else {
-                self.parse_stmt()
-            };
-
-            match parsed {
-                Ok(stmt) => statements.push(stmt),
-                Err(err) => {
-                    let err_span = err.span;
-                    self.report_error(err);
-                    self.synchronize_from(start_cursor);
-                    let id = self.alloc_id();
-                    statements.push(Stmt::error(err_span).with_id(id));
-                }
-            }
+            let stmt = self.parse_block_item();
+            statements.push(stmt);
         }
 
         self.eos_allows_else = prev_else;
@@ -55,15 +44,59 @@ impl<'a> Parser<'a> {
         Ok(Block::new(statements, span))
     }
 
+    #[inline(never)]
+    fn parse_block_item(&mut self) -> Stmt {
+        let start_cursor = self.checkpoint().cursor;
+        let parsed = if self.at(TokenKind::OpenBrace) {
+            match self.parse_block() {
+                Ok(block) => {
+                    let id = self.alloc_id();
+                    Ok(Stmt::block(block).with_id(id))
+                }
+                Err(err) => Err(err),
+            }
+        } else if self.at_declaration_start() {
+            self.parse_block_decl_stmt()
+        } else {
+            self.parse_stmt()
+        };
+
+        match parsed {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                let err_span = err.span();
+                self.report_error(err);
+                self.synchronize_from(start_cursor);
+                let id = self.alloc_id();
+                Stmt::error(err_span).with_id(id)
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn parse_block_decl_stmt(&mut self) -> ParseResult<Stmt> {
+        let decl = self.parse_decl()?;
+        let id = self.alloc_id();
+        Ok(Stmt::decl(decl).with_id(id))
+    }
+
     /// Parses a single statement.
     pub fn parse_stmt(&mut self) -> ParseResult<Stmt> {
+        if self.at(TokenKind::OpenBrace) {
+            let block = self.parse_block()?;
+            let id = self.alloc_id();
+            return Ok(Stmt::block(block).with_id(id));
+        }
+        self.enter_recursion()?;
+        let res = self.parse_stmt_inner();
+        self.exit_recursion();
+        res
+    }
+
+    #[inline(never)]
+    fn parse_stmt_inner(&mut self) -> ParseResult<Stmt> {
         let tok = self.current();
         match tok.kind {
-            TokenKind::OpenBrace => {
-                let block = self.parse_block()?;
-                let id = self.alloc_id();
-                Ok(Stmt::block(block).with_id(id))
-            }
             TokenKind::Let | TokenKind::Const => {
                 let var_stmt = self.parse_variable_stmt_inner()?;
                 let span = var_stmt.span;
@@ -383,7 +416,7 @@ impl<'a> Parser<'a> {
             match self.parse_stmt() {
                 Ok(stmt) => stmts.push(stmt),
                 Err(err) => {
-                    let err_span = err.span;
+                    let err_span = err.span();
                     self.report_error(err);
                     self.synchronize_to_switch_arm();
                     let id = self.alloc_id();

@@ -317,33 +317,33 @@ pub enum StmtKind {
     /// A nested block statement: `{ ... }`.
     Block(Block),
     /// Variable binding statement: `let x = 1;` or `const y = 2;`.
-    Variable(VariableStmt),
+    Variable(Box<VariableStmt>),
     /// RAII disposable binding: `using res = init();`.
-    Using(UsingStmt),
+    Using(Box<UsingStmt>),
     /// Conditional branch: `if (cond) { ... } else { ... }`.
-    If(IfStmt),
+    If(Box<IfStmt>),
     /// Post-test loop: `do { ... } while (cond);`.
-    DoWhile(DoWhileStmt),
+    DoWhile(Box<DoWhileStmt>),
     /// Pre-test loop: `while (cond) { ... }`.
-    While(WhileStmt),
+    While(Box<WhileStmt>),
     /// For loop: standard C-style or iteration (`of`/`in`).
-    For(ForStmt),
+    For(Box<ForStmt>),
     /// Pattern-matching switch statement: `switch (v) { ... }`.
-    Switch(SwitchStmt),
+    Switch(Box<SwitchStmt>),
     /// Return statement: `return expr;`.
-    Return(ReturnStmt),
+    Return(Box<ReturnStmt>),
     /// Break statement: `break;`.
     Break(BreakStmt),
     /// Continue statement: `continue;`.
     Continue(ContinueStmt),
     /// Deferred cleanup: `defer expr;`.
-    Defer(DeferStmt),
+    Defer(Box<DeferStmt>),
     /// Unsafe execution block: `unsafe { ... }`.
-    Unsafe(UnsafeStmt),
+    Unsafe(Box<UnsafeStmt>),
     /// Local declaration inside a block: `function helper() {}`, `struct Local {}`.
     Decl(Box<Decl>),
     /// Labeled statement: `label: for (...) { ... }`.
-    Labeled(LabeledStmt),
+    Labeled(Box<LabeledStmt>),
     /// Debugger breakpoint: `debugger;`.
     Debugger,
     /// Expression statement: `expr;`.
@@ -389,13 +389,16 @@ impl Stmt {
 
     pub fn variable(modifier: VarModifier, declarations: Vec<VariableDecl>, span: Span) -> Self {
         Self::new(
-            StmtKind::Variable(VariableStmt::new(modifier, declarations, span)),
+            StmtKind::Variable(Box::new(VariableStmt::new(modifier, declarations, span))),
             span,
         )
     }
 
     pub fn using_stmt(name: Ident, ty: Option<Type>, init: Expr, span: Span) -> Self {
-        Self::new(StmtKind::Using(UsingStmt::new(name, ty, init, span)), span)
+        Self::new(
+            StmtKind::Using(Box::new(UsingStmt::new(name, ty, init, span))),
+            span,
+        )
     }
 
     pub fn if_stmt(
@@ -405,18 +408,26 @@ impl Stmt {
         span: Span,
     ) -> Self {
         Self::new(
-            StmtKind::If(IfStmt::new(condition, then_branch, else_branch, span)),
+            StmtKind::If(Box::new(IfStmt::new(
+                condition,
+                then_branch,
+                else_branch,
+                span,
+            ))),
             span,
         )
     }
 
     pub fn while_stmt(condition: Expr, body: Stmt, span: Span) -> Self {
-        Self::new(StmtKind::While(WhileStmt::new(condition, body, span)), span)
+        Self::new(
+            StmtKind::While(Box::new(WhileStmt::new(condition, body, span))),
+            span,
+        )
     }
 
     pub fn do_while(body: Stmt, condition: Expr, span: Span) -> Self {
         Self::new(
-            StmtKind::DoWhile(DoWhileStmt::new(body, condition, span)),
+            StmtKind::DoWhile(Box::new(DoWhileStmt::new(body, condition, span))),
             span,
         )
     }
@@ -429,12 +440,12 @@ impl Stmt {
         span: Span,
     ) -> Self {
         Self::new(
-            StmtKind::For(ForStmt::Standard {
+            StmtKind::For(Box::new(ForStmt::Standard {
                 init,
                 test,
                 update,
                 body: Box::new(body),
-            }),
+            })),
             span,
         )
     }
@@ -448,23 +459,26 @@ impl Stmt {
         span: Span,
     ) -> Self {
         Self::new(
-            StmtKind::For(ForStmt::Iteration {
+            StmtKind::For(Box::new(ForStmt::Iteration {
                 modifier,
                 target,
                 kind,
                 iterable,
                 body: Box::new(body),
-            }),
+            })),
             span,
         )
     }
 
     pub fn switch_stmt(target: Expr, cases: Vec<SwitchCase>, span: Span) -> Self {
-        Self::new(StmtKind::Switch(SwitchStmt::new(target, cases, span)), span)
+        Self::new(
+            StmtKind::Switch(Box::new(SwitchStmt::new(target, cases, span))),
+            span,
+        )
     }
 
     pub fn return_stmt(value: Option<Expr>, span: Span) -> Self {
-        Self::new(StmtKind::Return(ReturnStmt::new(value, span)), span)
+        Self::new(StmtKind::Return(Box::new(ReturnStmt::new(value, span))), span)
     }
 
     pub fn break_stmt(label: Option<Ident>, span: Span) -> Self {
@@ -476,11 +490,17 @@ impl Stmt {
     }
 
     pub fn defer_stmt(statement: Stmt, span: Span) -> Self {
-        Self::new(StmtKind::Defer(DeferStmt::new(statement, span)), span)
+        Self::new(
+            StmtKind::Defer(Box::new(DeferStmt::new(statement, span))),
+            span,
+        )
     }
 
     pub fn unsafe_stmt(block: Block, span: Span) -> Self {
-        Self::new(StmtKind::Unsafe(UnsafeStmt::new(block, span)), span)
+        Self::new(
+            StmtKind::Unsafe(Box::new(UnsafeStmt::new(block, span))),
+            span,
+        )
     }
 
     pub fn decl(decl: Decl) -> Self {
@@ -490,7 +510,7 @@ impl Stmt {
 
     pub fn labeled(label: Ident, statement: Stmt, span: Span) -> Self {
         Self::new(
-            StmtKind::Labeled(LabeledStmt::new(label, statement, span)),
+            StmtKind::Labeled(Box::new(LabeledStmt::new(label, statement, span))),
             span,
         )
     }

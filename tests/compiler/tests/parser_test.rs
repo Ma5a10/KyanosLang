@@ -174,7 +174,7 @@ fn test_parse_eos_swift_style_rules() {
     p5.bump(); // 1
     let err = p5.parse_eos().expect_err("expected EOS error on same line");
     assert_eq!(
-        err.kind,
+        *err.kind(),
         ParseErrorKind::ExpectedEos {
             found: TokenKind::IntegerLiteral
         }
@@ -209,7 +209,7 @@ fn test_with_offset_and_lexer_error_propagation() {
     // Lexer error on '@' was captured at collection time without halting token stream.
     assert_eq!(parser.errors().len(), 1);
     assert!(matches!(
-        parser.errors()[0].kind,
+        parser.errors()[0].kind(),
         ParseErrorKind::LexerError(_)
     ));
 
@@ -285,7 +285,7 @@ fn test_literal_decoding_all_kinds() {
     // Overflow beyond u64::MAX reports InvalidLiteral.
     let mut overflow_parser = Parser::new("99999999999999999999999");
     let err = overflow_parser.parse_expr().unwrap_err();
-    assert!(matches!(err.kind, ParseErrorKind::InvalidLiteral(_)));
+    assert!(matches!(err.kind(), ParseErrorKind::InvalidLiteral(_)));
 }
 
 #[test]
@@ -454,7 +454,7 @@ fn test_pratt_precedence_and_associativity() {
     let _ = bad_assign.parse_expr().unwrap();
     assert_eq!(bad_assign.errors().len(), 1);
     assert_eq!(
-        bad_assign.errors()[0].kind,
+        *bad_assign.errors()[0].kind(),
         ParseErrorKind::InvalidAssignmentTarget
     );
 }
@@ -616,19 +616,15 @@ fn test_composite_literals_struct_init_and_arrow_functions() {
 
     // Struct instantiation (plain, dotted, and generic)
     let st = parse_expr_ok(r#"std.Pair<int, string> { first: 1, second, ...base }"#);
-    let ExprKind::StructInstantiation {
-        struct_name,
-        type_arguments: Some(ta),
-        fields,
-    } = st.kind
-    else {
+    let ExprKind::StructInstantiation(si) = st.kind else {
         panic!("expected StructInstantiation");
     };
-    assert_eq!(struct_name.to_string(), "std.Pair");
+    let ta = si.type_arguments.as_ref().expect("type_arguments");
+    assert_eq!(si.struct_name.to_string(), "std.Pair");
     assert_eq!(ta.args.len(), 2);
-    assert_eq!(fields.len(), 3);
+    assert_eq!(si.fields.len(), 3);
     assert!(matches!(
-        fields[1],
+        si.fields[1],
         StructFieldInit::Field { value: None, .. }
     ));
 
@@ -636,49 +632,39 @@ fn test_composite_literals_struct_init_and_arrow_functions() {
     let arrow0 = parse_expr_ok("() => 1");
     assert!(matches!(
         arrow0.kind,
-        ExprKind::ArrowFunction {
-            is_async: false,
-            ref params,
-            body: ArrowBody::Expr(_),
-            ..
-        } if params.params.is_empty()
+        ExprKind::ArrowFunction(ref af)
+            if !af.is_async && af.params.params.is_empty() && matches!(af.body, ArrowBody::Expr(_))
     ));
 
     let arrow_block = parse_expr_ok("(): int => { return 1 }");
     assert!(matches!(
         arrow_block.kind,
-        ExprKind::ArrowFunction {
-            return_type: Some(_),
-            body: ArrowBody::Block(ref b),
-            ..
-        } if b.statements.len() == 1
+        ExprKind::ArrowFunction(ref af)
+            if af.return_type.is_some()
+                && matches!(af.body, ArrowBody::Block(ref b) if b.statements.len() == 1)
     ));
 
     let arrow_single = parse_expr_ok("x => x * 2");
     assert!(matches!(
         arrow_single.kind,
-        ExprKind::ArrowFunction {
-            ref params,
-            ..
-        } if params.params.len() == 1
+        ExprKind::ArrowFunction(ref af) if af.params.params.len() == 1
     ));
 
     let arrow_typed = parse_expr_ok("(x: int, ...rest: int[]): int => x + 1");
-    let ExprKind::ArrowFunction { params, .. } = arrow_typed.kind else {
+    let ExprKind::ArrowFunction(af_typed) = arrow_typed.kind else {
         panic!("expected ArrowFunction");
     };
-    assert_eq!(params.params.len(), 1);
-    assert!(matches!(params.params[0].target, BindingTarget::Ident(_)));
-    assert!(params.rest.is_some());
+    assert_eq!(af_typed.params.params.len(), 1);
+    assert!(matches!(
+        af_typed.params.params[0].target,
+        BindingTarget::Ident(_)
+    ));
+    assert!(af_typed.params.rest.is_some());
 
     let arrow_generic = parse_expr_ok("async <T>(x: T) => await x");
     assert!(matches!(
         arrow_generic.kind,
-        ExprKind::ArrowFunction {
-            is_async: true,
-            type_parameters: Some(_),
-            ..
-        }
+        ExprKind::ArrowFunction(ref af) if af.is_async && af.type_parameters.is_some()
     ));
 
     assert!(matches!(
@@ -1166,7 +1152,7 @@ fn test_variable_and_using_statements() {
     assert!(matches!(stmt.kind, StmtKind::Variable(_)));
     assert_eq!(missing_const.errors().len(), 1);
     assert_eq!(
-        missing_const.errors()[0].kind,
+        *missing_const.errors()[0].kind(),
         ParseErrorKind::MissingInitializer
     );
 }
@@ -1198,7 +1184,7 @@ fn test_if_dangling_else_while_and_do_while() {
     let _ = bad_else.parse_stmt().unwrap();
     assert_eq!(bad_else.errors().len(), 1);
     assert_eq!(
-        bad_else.errors()[0].kind,
+        *bad_else.errors()[0].kind(),
         ParseErrorKind::ExpectedEos {
             found: TokenKind::Else
         }
@@ -1210,44 +1196,56 @@ fn test_for_standard_and_iteration_statements() {
     let std_for = parse_stmt_ok("for (let i = 0; i < 10; i += 1) { sum += i }");
     assert!(matches!(
         std_for.kind,
-        StmtKind::For(ForStmt::Standard {
-            init: Some(ForInit::Let(_)),
-            test: Some(_),
-            update: Some(_),
-            ..
-        })
+        StmtKind::For(ref f) if matches!(
+            **f,
+            ForStmt::Standard {
+                init: Some(ForInit::Let(_)),
+                test: Some(_),
+                update: Some(_),
+                ..
+            }
+        )
     ));
 
     let empty_for = parse_stmt_ok("for (;;) { break }");
     assert!(matches!(
         empty_for.kind,
-        StmtKind::For(ForStmt::Standard {
-            init: None,
-            test: None,
-            update: None,
-            ..
-        })
+        StmtKind::For(ref f) if matches!(
+            **f,
+            ForStmt::Standard {
+                init: None,
+                test: None,
+                update: None,
+                ..
+            }
+        )
     ));
 
     let for_of = parse_stmt_ok("for (const [k, v] of pairs) { usePair(k, v) }");
     assert!(matches!(
         for_of.kind,
-        StmtKind::For(ForStmt::Iteration {
-            modifier: VarModifier::Const,
-            target: BindingTarget::Tuple { .. },
-            kind: ForIterationKind::Of,
-            ..
-        })
+        StmtKind::For(ref f) if matches!(
+            **f,
+            ForStmt::Iteration {
+                modifier: VarModifier::Const,
+                target: BindingTarget::Tuple { .. },
+                kind: ForIterationKind::Of,
+                ..
+            }
+        )
     ));
 
     let for_in = parse_stmt_ok("for (let key in dict) { println(key) }");
     assert!(matches!(
         for_in.kind,
-        StmtKind::For(ForStmt::Iteration {
-            modifier: VarModifier::Let,
-            kind: ForIterationKind::In,
-            ..
-        })
+        StmtKind::For(ref f) if matches!(
+            **f,
+            ForStmt::Iteration {
+                modifier: VarModifier::Let,
+                kind: ForIterationKind::In,
+                ..
+            }
+        )
     ));
 }
 
@@ -1313,9 +1311,9 @@ fn test_jump_defer_unsafe_labeled_newlines_and_recovery() {
     assert!(matches!(
         block.statements[8].kind,
         StmtKind::Expr(Expr {
-            kind: ExprKind::ArrowFunction { is_async: true, .. },
+            kind: ExprKind::ArrowFunction(ref af),
             ..
-        })
+        }) if af.is_async
     ));
 
     // 2. Error recovery inside block continues parsing subsequent valid statements.
@@ -1681,4 +1679,143 @@ export function main(): int {
         el,
         SourceElement::Decl(d) if matches!(d.kind, DeclKind::Function(ref f) if f.name.as_str() == "recovered")
     )));
+}
+
+#[test]
+fn test_recursion_depth_limit_prevents_stack_overflow() {
+    use kyanos_parse::MAX_RECURSION_DEPTH;
+
+    assert_eq!(MAX_RECURSION_DEPTH, 128);
+
+    // 1. Exactly MAX_RECURSION_DEPTH total nesting (126 blocks + 1 stmt + 1 expr = 128) and prefix chains succeed.
+    let ok_blocks = format!(
+        "{}1{}",
+        "{".repeat(MAX_RECURSION_DEPTH - 2),
+        "}".repeat(MAX_RECURSION_DEPTH - 2)
+    );
+    let ok_block_res = parse(&ok_blocks);
+    assert!(
+        !ok_block_res.has_errors(),
+        "128-deep block+stmt+expr should succeed, got {:?}",
+        ok_block_res.errors
+    );
+
+    let ok_expr = format!("{}1", "- ".repeat(MAX_RECURSION_DEPTH - 2));
+    let (expr_node, expr_errs) = parse_expr(&ok_expr);
+    assert!(
+        expr_errs.is_empty(),
+        "128-deep expression should succeed, got {:?}",
+        expr_errs
+    );
+    assert!(matches!(expr_node.kind, ExprKind::UnaryPrefix { .. }));
+
+    // 2. Exceeding MAX_RECURSION_DEPTH reports RecursionLimitExceeded without crashing.
+    let over_blocks = format!(
+        "{}1{}",
+        "{".repeat(MAX_RECURSION_DEPTH + 10),
+        "}".repeat(MAX_RECURSION_DEPTH + 10)
+    );
+    let block_res = parse(&over_blocks);
+    assert!(block_res
+        .errors
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+
+    let over_expr = format!("{}1", "- ".repeat(MAX_RECURSION_DEPTH + 10));
+    let (_, over_expr_errs) = parse_expr(&over_expr);
+    assert!(over_expr_errs
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+
+    let over_arrays = format!(
+        "{}1{}",
+        "[".repeat(MAX_RECURSION_DEPTH + 10),
+        "]".repeat(MAX_RECURSION_DEPTH + 10)
+    );
+    let (_, over_arr_errs) = parse_expr(&over_arrays);
+    assert!(over_arr_errs
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+
+    let over_parens = format!(
+        "{}1{}",
+        "(".repeat(MAX_RECURSION_DEPTH + 10),
+        ")".repeat(MAX_RECURSION_DEPTH + 10)
+    );
+    let (_, over_paren_errs) = parse_expr(&over_parens);
+    assert!(over_paren_errs
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+
+    let over_ptr_type = format!("{}int", "* ".repeat(MAX_RECURSION_DEPTH + 10));
+    let mut ty_parser = Parser::new(&over_ptr_type);
+    let ty_err = ty_parser.parse_type().unwrap_err();
+    assert_eq!(*ty_err.kind(), ParseErrorKind::RecursionLimitExceeded);
+
+    let over_pattern = format!(
+        "{}x{}",
+        "[".repeat(MAX_RECURSION_DEPTH + 10),
+        "]".repeat(MAX_RECURSION_DEPTH + 10)
+    );
+    let mut pat_parser = Parser::new(&over_pattern);
+    let pat_err = pat_parser.parse_pattern().unwrap_err();
+    assert_eq!(*pat_err.kind(), ParseErrorKind::RecursionLimitExceeded);
+
+    let over_interp_expr = format!(
+        "`${{{}1{}}}`",
+        "[".repeat(MAX_RECURSION_DEPTH + 10),
+        "]".repeat(MAX_RECURSION_DEPTH + 10)
+    );
+    let (_, over_interp_errs) = parse_expr(&over_interp_expr);
+    assert!(over_interp_errs
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+}
+
+#[test]
+fn test_parse_options_custom_recursion_depth() {
+    use kyanos_parse::{parse_expr_with_options, parse_with_options, ParseError, ParseOptions};
+
+    // ParseError is boxed so Result<T, ParseError> carries only pointer-sized Err payloads.
+    assert_eq!(
+        std::mem::size_of::<ParseError>(),
+        std::mem::size_of::<usize>()
+    );
+
+    // 1. Lowering max_recursion_depth rejects nesting beyond the configured limit.
+    let strict_opts = ParseOptions::new().with_max_recursion_depth(4);
+    assert_eq!(strict_opts.max_recursion_depth, 4);
+
+    let (ok_expr, ok_errs) = parse_expr_with_options("(((1)))", strict_opts);
+    assert!(
+        ok_errs.is_empty(),
+        "4-deep expr should succeed: {:?}",
+        ok_errs
+    );
+    assert!(matches!(ok_expr.kind, ExprKind::Parenthesized(_)));
+
+    let (_, err_list) = parse_expr_with_options("((((1))))", strict_opts);
+    assert_eq!(*err_list[0].kind(), ParseErrorKind::RecursionLimitExceeded);
+    assert!(err_list[0].message().contains("(4)"));
+
+    let prog_out = parse_with_options("{{{{{1}}}}}", strict_opts);
+    assert!(prog_out.errors.iter().any(
+        |e| *e.kind() == ParseErrorKind::RecursionLimitExceeded && e.message().contains("(4)")
+    ));
+
+    // 2. Raising max_recursion_depth on a thread with an explicit stack size (8 MiB) succeeds.
+    let raised_opts = ParseOptions::new().with_max_recursion_depth(256);
+    let deep_parens = format!("{}1{}", "(".repeat(255), ")".repeat(255));
+    let (deep_expr, deep_errs) = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || parse_expr_with_options(&deep_parens, raised_opts))
+        .expect("spawn parser thread")
+        .join()
+        .expect("join parser thread");
+    assert!(
+        deep_errs.is_empty(),
+        "256-deep expr with raised limit and 8 MiB stack should succeed: {:?}",
+        deep_errs
+    );
+    assert!(matches!(deep_expr.kind, ExprKind::Parenthesized(_)));
 }

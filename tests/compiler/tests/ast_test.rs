@@ -15,9 +15,9 @@ use kyanos_ast::{
     Expr, ExprKind, ExternBlockDecl, ExternFunctionDecl, ExternMember, ExternParameterList,
     ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType, FunctionTypeParam,
     GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature,
-    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, LabeledStmt, Literal,
-    LiteralKind, LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp,
-    Parameter, ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, Literal, LiteralKind,
+    LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp, Parameter,
+    ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
     PrivateIdent, Program, PropertyName, Radix, RestParameter, ReturnType, SingleExternDecl,
     SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral, StructDecl, StructField,
     StructFieldInit, StructFieldPattern, StructMember, SwitchCase, SwitchExprArm,
@@ -286,14 +286,14 @@ fn test_type_reference_and_generics() {
     let generic_ref = Type::reference(map_name.clone(), Some(args), Span::new(0, 32));
     assert_eq!(
         generic_ref.kind,
-        TypeKind::Reference(TypeReference::new(
+        TypeKind::Reference(Box::new(TypeReference::new(
             map_name,
             Some(TypeArguments::new(
                 vec![string_ty, int_ty.clone()],
                 Span::new(19, 32)
             )),
             Span::new(0, 32)
-        ))
+        )))
     );
 
     // Generic parameter definition: <T extends Object = int>
@@ -608,37 +608,30 @@ fn test_literal_complex_expressions() {
     }
 
     // Struct Instantiation: Point { x: 10, ...other }
-    let struct_init = Expr::new(
-        ExprKind::StructInstantiation {
-            struct_name: TypeName::single(Ident::new("Point", Span::new(0, 5))),
-            type_arguments: None,
-            fields: vec![
-                StructFieldInit::Field {
-                    name: Ident::new("x", Span::new(8, 9)),
-                    value: Some(Expr::literal(Literal::integer(
-                        "10",
-                        10,
-                        Radix::Decimal,
-                        Span::new(11, 13),
-                    ))),
-                    span: Span::new(8, 13),
-                },
-                StructFieldInit::Spread {
-                    expr: Expr::ident(Ident::new("other", Span::new(18, 23))),
-                    span: Span::new(15, 23),
-                },
-            ],
-        },
+    let struct_init = Expr::struct_instantiation(
+        TypeName::single(Ident::new("Point", Span::new(0, 5))),
+        None,
+        vec![
+            StructFieldInit::Field {
+                name: Ident::new("x", Span::new(8, 9)),
+                value: Some(Expr::literal(Literal::integer(
+                    "10",
+                    10,
+                    Radix::Decimal,
+                    Span::new(11, 13),
+                ))),
+                span: Span::new(8, 13),
+            },
+            StructFieldInit::Spread {
+                expr: Expr::ident(Ident::new("other", Span::new(18, 23))),
+                span: Span::new(15, 23),
+            },
+        ],
         Span::new(0, 25),
     );
-    if let ExprKind::StructInstantiation {
-        struct_name,
-        fields,
-        ..
-    } = struct_init.kind
-    {
-        assert_eq!(struct_name.to_string(), "Point");
-        assert_eq!(fields.len(), 2);
+    if let ExprKind::StructInstantiation(si) = struct_init.kind {
+        assert_eq!(si.struct_name.to_string(), "Point");
+        assert_eq!(si.fields.len(), 2);
     } else {
         panic!("expected ExprKind::StructInstantiation");
     }
@@ -666,26 +659,21 @@ fn test_control_and_functional_expressions() {
         Expr::ident(Ident::new("x", Span::new(33, 34))),
         Expr::literal(Literal::integer("1", 1, Radix::Decimal, Span::new(37, 38))),
     );
-    let arrow = Expr::new(
-        ExprKind::ArrowFunction {
-            is_async: false,
-            type_parameters: None,
-            params,
-            return_type: Some(ReturnType::Type(Type::predefined(
-                PredefinedType::Int,
-                Span::new(26, 29),
-            ))),
-            body: ArrowBody::Expr(Box::new(body)),
-        },
+    let arrow = Expr::arrow_function(
+        false,
+        None,
+        params,
+        Some(ReturnType::Type(Type::predefined(
+            PredefinedType::Int,
+            Span::new(26, 29),
+        ))),
+        ArrowBody::Expr(Box::new(body)),
         Span::new(0, 38),
     );
-    if let ExprKind::ArrowFunction {
-        is_async, params, ..
-    } = arrow.kind
-    {
-        assert!(!is_async);
-        assert_eq!(params.params.len(), 1);
-        assert!(params.rest.is_some());
+    if let ExprKind::ArrowFunction(af) = arrow.kind {
+        assert!(!af.is_async);
+        assert_eq!(af.params.params.len(), 1);
+        assert!(af.params.rest.is_some());
     } else {
         panic!("expected ExprKind::ArrowFunction");
     }
@@ -757,10 +745,10 @@ fn test_control_and_functional_expressions() {
 
     // Sizeof: sizeof(int)
     let sizeof_expr = Expr::new(
-        ExprKind::Sizeof(SizeofTarget::Type(Type::predefined(
+        ExprKind::Sizeof(SizeofTarget::Type(Box::new(Type::predefined(
             PredefinedType::Int,
             Span::new(7, 10),
-        ))),
+        )))),
         Span::new(0, 11),
     );
     assert_eq!(sizeof_expr.span, Span::new(0, 11));
@@ -1116,15 +1104,19 @@ fn test_control_flow_statements() {
         body.clone(),
         Span::new(0, 35),
     );
-    if let StmtKind::For(ForStmt::Standard {
-        init, test, update, ..
-    }) = for_stmt.kind
-    {
-        assert!(init.is_some());
-        assert!(test.is_some());
-        assert_eq!(update.unwrap().len(), 1);
+    if let StmtKind::For(f) = for_stmt.kind {
+        if let ForStmt::Standard {
+            init, test, update, ..
+        } = *f
+        {
+            assert!(init.is_some());
+            assert!(test.is_some());
+            assert_eq!(update.unwrap().len(), 1);
+        } else {
+            panic!("expected Standard ForStmt");
+        }
     } else {
-        panic!("expected Standard ForStmt");
+        panic!("expected StmtKind::For");
     }
 
     // for (let item of array) { ... }
@@ -1136,11 +1128,15 @@ fn test_control_flow_statements() {
         body.clone(),
         Span::new(0, 27),
     );
-    if let StmtKind::For(ForStmt::Iteration { kind, modifier, .. }) = for_of.kind {
-        assert_eq!(kind, ForIterationKind::Of);
-        assert_eq!(modifier, VarModifier::Let);
+    if let StmtKind::For(f) = for_of.kind {
+        if let ForStmt::Iteration { kind, modifier, .. } = *f {
+            assert_eq!(kind, ForIterationKind::Of);
+            assert_eq!(modifier, VarModifier::Let);
+        } else {
+            panic!("expected Iteration ForStmt");
+        }
     } else {
-        panic!("expected Iteration ForStmt");
+        panic!("expected StmtKind::For");
     }
 }
 
@@ -1215,8 +1211,8 @@ fn test_switch_and_jump_statements() {
         ),
         Span::new(0, 22),
     );
-    if let StmtKind::Labeled(LabeledStmt { label, .. }) = labeled.kind {
-        assert_eq!(label.as_str(), "outer");
+    if let StmtKind::Labeled(l) = labeled.kind {
+        assert_eq!(l.label.as_str(), "outer");
         assert_eq!(labeled.span, Span::new(0, 22));
     } else {
         panic!("expected StmtKind::Labeled");

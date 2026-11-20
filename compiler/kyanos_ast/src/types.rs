@@ -335,7 +335,7 @@ pub enum TypeKind {
     /// Predefined primitive types (e.g. `int`, `double`, `string`).
     Predefined(PredefinedType),
     /// Type reference (e.g. `User`, `List<int>`).
-    Reference(TypeReference),
+    Reference(Box<TypeReference>),
     /// Raw pointer: `*T` (mutable) or `*const T` (immutable).
     Pointer { is_const: bool, elem: Box<Type> },
     /// Reference: `&T` (mutable) or `&const T` (immutable).
@@ -351,7 +351,7 @@ pub enum TypeKind {
     /// Anonymous struct type: `{ x: int, y: double, onClick(x: int): void }`.
     AnonymousStruct(Vec<AnonymousStructMember>),
     /// Function type: `(x: int) => void`.
-    Function(FunctionType),
+    Function(Box<FunctionType>),
     /// Parenthesized type: `(T)`.
     Parenthesized(Box<Type>),
     /// The `this` type.
@@ -394,9 +394,13 @@ impl Type {
 
     pub fn reference(name: TypeName, args: Option<TypeArguments>, span: Span) -> Self {
         Self::new(
-            TypeKind::Reference(TypeReference::new(name, args, span)),
+            TypeKind::Reference(Box::new(TypeReference::new(name, args, span))),
             span,
         )
+    }
+
+    pub fn function(func: FunctionType, span: Span) -> Self {
+        Self::new(TypeKind::Function(Box::new(func)), span)
     }
 
     pub fn pointer(elem: Type, is_const: bool, span: Span) -> Self {

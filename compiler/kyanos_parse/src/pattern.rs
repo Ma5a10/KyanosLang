@@ -18,6 +18,13 @@ use crate::Parser;
 impl<'a> Parser<'a> {
     /// Parses a binding target: `Identifier | Underscore | tuplePattern | objectPattern`.
     pub fn parse_binding_target(&mut self) -> ParseResult<BindingTarget> {
+        self.enter_recursion()?;
+        let res = self.parse_binding_target_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_binding_target_inner(&mut self) -> ParseResult<BindingTarget> {
         let tok = self.current();
         match tok.kind {
             TokenKind::Identifier => {
@@ -49,6 +56,13 @@ impl<'a> Parser<'a> {
 
     /// Parses a match pattern used in `switch` arms and tuple destructuring.
     pub fn parse_pattern(&mut self) -> ParseResult<Pattern> {
+        self.enter_recursion()?;
+        let res = self.parse_pattern_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_pattern_inner(&mut self) -> ParseResult<Pattern> {
         let tok = self.current();
         match tok.kind {
             TokenKind::Underscore => {
@@ -221,25 +235,28 @@ impl<'a> Parser<'a> {
 
     fn parse_tuple_pattern_elements(&mut self) -> ParseResult<Vec<TuplePatternElement>> {
         self.expect(TokenKind::OpenBracket, "'['")?;
-        let elements = self.with_grouping(|p| {
-            let mut list = Vec::new();
-            while !p.at(TokenKind::CloseBracket) && !p.is_eof() {
-                if let Some(ellipsis) = p.eat(TokenKind::Ellipsis) {
-                    let pat = p.parse_pattern()?;
-                    let span = p.span_from(ellipsis.span);
+        self.grouping_depth += 1;
+        let mut list = Vec::new();
+        let res = (|| {
+            while !self.at(TokenKind::CloseBracket) && !self.is_eof() {
+                if let Some(ellipsis) = self.eat(TokenKind::Ellipsis) {
+                    let pat = self.parse_pattern()?;
+                    let span = self.span_from(ellipsis.span);
                     list.push(TuplePatternElement::rest(pat, span));
                 } else {
-                    let pat = p.parse_pattern()?;
+                    let pat = self.parse_pattern()?;
                     list.push(TuplePatternElement::normal(pat));
                 }
-                if p.eat(TokenKind::Comma).is_none() {
+                if self.eat(TokenKind::Comma).is_none() {
                     break;
                 }
             }
-            Ok::<_, ParseError>(list)
-        })?;
+            Ok::<_, ParseError>(())
+        })();
+        self.grouping_depth -= 1;
+        res?;
         self.expect(TokenKind::CloseBracket, "']'")?;
-        Ok(elements)
+        Ok(list)
     }
 
     fn parse_object_pattern_props(&mut self) -> ParseResult<Vec<ObjectPatternProp>> {

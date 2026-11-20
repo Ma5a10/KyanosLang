@@ -677,25 +677,25 @@ impl SingleExternDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeclKind {
     /// Function declaration.
-    Function(FunctionDecl),
+    Function(Box<FunctionDecl>),
     /// Nominal stack value type (struct).
-    Struct(StructDecl),
+    Struct(Box<StructDecl>),
     /// Nominal heap reference type (class).
-    Class(ClassDecl),
+    Class(Box<ClassDecl>),
     /// Structural duck-typed interface.
-    Interface(InterfaceDecl),
+    Interface(Box<InterfaceDecl>),
     /// Tagged union / algebraic data type (enum).
-    Enum(EnumDecl),
+    Enum(Box<EnumDecl>),
     /// Type alias declaration.
-    TypeAlias(TypeAliasDecl),
+    TypeAlias(Box<TypeAliasDecl>),
     /// Variable declaration (`let` / `const`).
-    Variable(VariableStmt),
+    Variable(Box<VariableStmt>),
     /// RAII resource disposable declaration (`using`).
-    Using(UsingStmt),
+    Using(Box<UsingStmt>),
     /// FFI extern block (`extern "C" { ... }`).
-    ExternBlock(ExternBlockDecl),
+    ExternBlock(Box<ExternBlockDecl>),
     /// Standalone FFI extern declaration (`extern "C" function ...`).
-    SingleExtern(SingleExternDecl),
+    SingleExtern(Box<SingleExternDecl>),
     /// Placeholder produced by fault-tolerant error recovery in the parser.
     Error,
 }
@@ -730,51 +730,51 @@ impl Decl {
 
     pub fn function(decl: FunctionDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::Function(decl), span)
+        Self::new(DeclKind::Function(Box::new(decl)), span)
     }
 
     pub fn struct_decl(decl: StructDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::Struct(decl), span)
+        Self::new(DeclKind::Struct(Box::new(decl)), span)
     }
 
     pub fn class_decl(decl: ClassDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::Class(decl), span)
+        Self::new(DeclKind::Class(Box::new(decl)), span)
     }
 
     pub fn interface_decl(decl: InterfaceDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::Interface(decl), span)
+        Self::new(DeclKind::Interface(Box::new(decl)), span)
     }
 
     pub fn enum_decl(decl: EnumDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::Enum(decl), span)
+        Self::new(DeclKind::Enum(Box::new(decl)), span)
     }
 
     pub fn type_alias(decl: TypeAliasDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::TypeAlias(decl), span)
+        Self::new(DeclKind::TypeAlias(Box::new(decl)), span)
     }
 
     pub fn variable(stmt: VariableStmt) -> Self {
         let span = stmt.span;
-        Self::new(DeclKind::Variable(stmt), span)
+        Self::new(DeclKind::Variable(Box::new(stmt)), span)
     }
 
     pub fn using_decl(stmt: UsingStmt) -> Self {
         let span = stmt.span;
-        Self::new(DeclKind::Using(stmt), span)
+        Self::new(DeclKind::Using(Box::new(stmt)), span)
     }
 
     pub fn extern_block(decl: ExternBlockDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::ExternBlock(decl), span)
+        Self::new(DeclKind::ExternBlock(Box::new(decl)), span)
     }
 
     pub fn single_extern(decl: SingleExternDecl) -> Self {
         let span = decl.span;
-        Self::new(DeclKind::SingleExtern(decl), span)
+        Self::new(DeclKind::SingleExtern(Box::new(decl)), span)
     }
 }

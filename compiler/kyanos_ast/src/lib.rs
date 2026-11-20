@@ -26,8 +26,9 @@ pub use decl::{
 };
 
 pub use expr::{
-    Argument, ArrayElement, ArrowBody, Expr, ExprKind, MemberProperty, ObjectMember, ObjectMethod,
-    PropertyName, SizeofTarget, StructFieldInit, SwitchExprArm, TemplateStringPart,
+    Argument, ArrayElement, ArrowBody, ArrowFunctionExpr, Expr, ExprKind, MemberProperty,
+    ObjectMember, ObjectMethod, PropertyName, SizeofTarget, StructFieldInit,
+    StructInstantiationExpr, SwitchExprArm, TemplateStringPart,
 };
 pub use ident::{Ident, PrivateIdent};
 pub use literal::{

@@ -64,15 +64,17 @@ impl<'a> Parser<'a> {
                 }
 
                 let expr_start = idx + 2;
-                let expr_end = find_interpolation_end(inner, expr_start).ok_or_else(|| {
-                    ParseError::new(
-                        ParseErrorKind::InvalidLiteral(
-                            "Unterminated template interpolation".to_string(),
-                        ),
-                        tok.span,
-                        "Unterminated '${...}' in template literal",
-                    )
-                })?;
+                let max_depth = self.options.max_recursion_depth;
+                let expr_end =
+                    find_interpolation_end(inner, expr_start, 0, max_depth).ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorKind::InvalidLiteral(
+                                "Unterminated template interpolation".to_string(),
+                            ),
+                            tok.span,
+                            "Unterminated '${...}' in template literal",
+                        )
+                    })?;
 
                 let expr_slice = &inner[expr_start..expr_end];
                 let expr_abs_offset = inner_base_offset + expr_start;
@@ -88,8 +90,13 @@ impl<'a> Parser<'a> {
                         Expr::error(expr_span).with_id(err_id),
                     )));
                 } else {
-                    let mut sub_parser =
-                        Parser::with_offset(expr_slice, expr_abs_offset, self.next_node_id);
+                    let mut sub_parser = Parser::with_offset_and_state(
+                        expr_slice,
+                        expr_abs_offset,
+                        self.next_node_id,
+                        self.recursion_depth,
+                        self.options,
+                    );
                     let expr = sub_parser.parse_expr_with_recovery();
                     if !sub_parser.is_eof() {
                         let trailing = sub_parser.current();
@@ -317,8 +324,16 @@ fn decode_unicode_escape(inner: &str, idx: &mut usize, span: Span) -> ParseResul
 }
 
 /// Finds the byte index of the closing `}` matching `${` at `start`, mirroring lexer nesting rules.
-fn find_interpolation_end(inner: &str, start: usize) -> Option<usize> {
-    let mut depth = 1usize;
+fn find_interpolation_end(
+    inner: &str,
+    start: usize,
+    depth: usize,
+    max_depth: usize,
+) -> Option<usize> {
+    if depth >= max_depth {
+        return None;
+    }
+    let mut brace_depth = 1usize;
     let mut i = start;
 
     while i < inner.len() {
@@ -326,12 +341,12 @@ fn find_interpolation_end(inner: &str, start: usize) -> Option<usize> {
         let ch = rest.chars().next()?;
         match ch {
             '{' => {
-                depth += 1;
+                brace_depth += 1;
                 i += 1;
             }
             '}' => {
-                depth -= 1;
-                if depth == 0 {
+                brace_depth -= 1;
+                if brace_depth == 0 {
                     return Some(i);
                 }
                 i += 1;
@@ -346,7 +361,7 @@ fn find_interpolation_end(inner: &str, start: usize) -> Option<usize> {
                 i = skip_quoted(inner, i + 1, '\'')?;
             }
             '`' => {
-                i = skip_nested_template(inner, i + 1)?;
+                i = skip_nested_template(inner, i + 1, depth + 1, max_depth)?;
             }
             '/' if rest.starts_with("//") => {
                 i += 2;
@@ -392,10 +407,18 @@ fn skip_quoted(inner: &str, mut i: usize, quote: char) -> Option<usize> {
 }
 
 /// Skips past a nested template string literal inside an interpolation expression.
-fn skip_nested_template(inner: &str, mut i: usize) -> Option<usize> {
+fn skip_nested_template(
+    inner: &str,
+    mut i: usize,
+    depth: usize,
+    max_depth: usize,
+) -> Option<usize> {
+    if depth >= max_depth {
+        return None;
+    }
     while i < inner.len() {
         if inner[i..].starts_with("${") {
-            let close = find_interpolation_end(inner, i + 2)?;
+            let close = find_interpolation_end(inner, i + 2, depth + 1, max_depth)?;
             i = close + 1;
             continue;
         }

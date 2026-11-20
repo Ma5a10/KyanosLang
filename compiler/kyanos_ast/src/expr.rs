@@ -173,8 +173,26 @@ impl SwitchExprArm {
 /// Target of a `sizeof(...)` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SizeofTarget {
-    Type(Type),
+    Type(Box<Type>),
     Expr(Box<Expr>),
+}
+
+/// Struct instantiation expression payload: `Point { x: 10, y: 20 }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructInstantiationExpr {
+    pub struct_name: TypeName,
+    pub type_arguments: Option<TypeArguments>,
+    pub fields: Vec<StructFieldInit>,
+}
+
+/// Arrow function / lambda expression payload: `(x: int): int => x + 1`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrowFunctionExpr {
+    pub is_async: bool,
+    pub type_parameters: Option<TypeParameters>,
+    pub params: ParameterList,
+    pub return_type: Option<ReturnType>,
+    pub body: ArrowBody,
 }
 
 /// Member property for dot access (`obj.prop` or `obj.#privateProp`).
@@ -205,7 +223,7 @@ pub enum TemplateStringPart {
 pub enum ExprKind {
     // --- Primary Expressions ---
     /// Literal expression (e.g. `42`, `"hello"`, `true`, `null`).
-    Literal(Literal),
+    Literal(Box<Literal>),
     /// Variable or identifier reference (e.g. `foo`).
     Ident(Ident),
     /// The `this` self-reference.
@@ -221,19 +239,9 @@ pub enum ExprKind {
     /// Object literal: `{ x: 1, "key": val, ...rest }`.
     Object(Vec<ObjectMember>),
     /// Struct instantiation: `Point { x: 10, y: 20 }`.
-    StructInstantiation {
-        struct_name: TypeName,
-        type_arguments: Option<TypeArguments>,
-        fields: Vec<StructFieldInit>,
-    },
+    StructInstantiation(Box<StructInstantiationExpr>),
     /// Arrow function / lambda: `(x: int): int => x + 1`.
-    ArrowFunction {
-        is_async: bool,
-        type_parameters: Option<TypeParameters>,
-        params: ParameterList,
-        return_type: Option<ReturnType>,
-        body: ArrowBody,
-    },
+    ArrowFunction(Box<ArrowFunctionExpr>),
     /// Switch expression: `switch (val) { case 1 => "a", default => "b" }`.
     Switch {
         target: Box<Expr>,
@@ -264,7 +272,7 @@ pub enum ExprKind {
     /// Function or method call: `f(a, b)` or `f<T, U>(a, b)`.
     Call {
         callee: Box<Expr>,
-        type_arguments: Option<TypeArguments>,
+        type_arguments: Option<Box<TypeArguments>>,
         args: Vec<Argument>,
     },
     /// Postfix increment/decrement/non-null assertion: `x++`, `x--`, `x!`.
@@ -282,15 +290,15 @@ pub enum ExprKind {
     /// Object allocation: `new ClassName<T>(arg1, arg2)`.
     New {
         callee: Box<Expr>,
-        type_arguments: Option<TypeArguments>,
+        type_arguments: Option<Box<TypeArguments>>,
         args: Option<Vec<Argument>>,
     },
 
     // --- Type Operators ---
     /// Explicit type cast: `expr as Type`.
-    Cast { expr: Box<Expr>, ty: Type },
+    Cast { expr: Box<Expr>, ty: Box<Type> },
     /// Runtime type test: `expr is Type`.
-    TypeTest { expr: Box<Expr>, ty: Type },
+    TypeTest { expr: Box<Expr>, ty: Box<Type> },
 
     // --- Binary & Ternary Expressions ---
     /// Binary operator expression: `a + b`, `a && b`, `a ?? b`.
@@ -349,7 +357,43 @@ impl Expr {
 
     pub fn literal(lit: Literal) -> Self {
         let span = lit.span;
-        Self::new(ExprKind::Literal(lit), span)
+        Self::new(ExprKind::Literal(Box::new(lit)), span)
+    }
+
+    pub fn struct_instantiation(
+        struct_name: TypeName,
+        type_arguments: Option<TypeArguments>,
+        fields: Vec<StructFieldInit>,
+        span: Span,
+    ) -> Self {
+        Self::new(
+            ExprKind::StructInstantiation(Box::new(StructInstantiationExpr {
+                struct_name,
+                type_arguments,
+                fields,
+            })),
+            span,
+        )
+    }
+
+    pub fn arrow_function(
+        is_async: bool,
+        type_parameters: Option<TypeParameters>,
+        params: ParameterList,
+        return_type: Option<ReturnType>,
+        body: ArrowBody,
+        span: Span,
+    ) -> Self {
+        Self::new(
+            ExprKind::ArrowFunction(Box::new(ArrowFunctionExpr {
+                is_async,
+                type_parameters,
+                params,
+                return_type,
+                body,
+            })),
+            span,
+        )
     }
 
     pub fn ident(id: Ident) -> Self {
@@ -406,7 +450,7 @@ impl Expr {
         Self::new(
             ExprKind::Call {
                 callee: Box::new(callee),
-                type_arguments,
+                type_arguments: type_arguments.map(Box::new),
                 args,
             },
             span,
@@ -451,7 +495,33 @@ impl Expr {
         Self::new(
             ExprKind::Cast {
                 expr: Box::new(expr),
-                ty,
+                ty: Box::new(ty),
+            },
+            span,
+        )
+    }
+
+    pub fn type_test(expr: Expr, ty: Type, span: Span) -> Self {
+        Self::new(
+            ExprKind::TypeTest {
+                expr: Box::new(expr),
+                ty: Box::new(ty),
+            },
+            span,
+        )
+    }
+
+    pub fn new_expr(
+        callee: Expr,
+        type_arguments: Option<TypeArguments>,
+        args: Option<Vec<Argument>>,
+        span: Span,
+    ) -> Self {
+        Self::new(
+            ExprKind::New {
+                callee: Box::new(callee),
+                type_arguments: type_arguments.map(Box::new),
+                args,
             },
             span,
         )

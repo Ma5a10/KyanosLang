@@ -23,9 +23,45 @@ use kyanos_lexer::{Token, TokenKind};
 pub use error::{ParseError, ParseErrorKind, ParseResult};
 pub use stream::{Checkpoint, TokenStream};
 
-/// Parses a complete Kyanos compilation unit from source text.
+/// Default maximum syntax nesting depth permitted by the parser (blocks, expressions, types, patterns).
+pub const MAX_RECURSION_DEPTH: usize = 128;
+
+/// Configuration options controlling parser behavior and safety limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseOptions {
+    /// Maximum syntax nesting depth permitted before emitting [`ParseErrorKind::RecursionLimitExceeded`].
+    pub max_recursion_depth: usize,
+}
+
+impl ParseOptions {
+    /// Creates options initialized with default safety limits ([`MAX_RECURSION_DEPTH`]).
+    pub const fn new() -> Self {
+        Self {
+            max_recursion_depth: MAX_RECURSION_DEPTH,
+        }
+    }
+
+    /// Overrides the maximum syntax recursion depth limit.
+    pub const fn with_max_recursion_depth(mut self, max_recursion_depth: usize) -> Self {
+        self.max_recursion_depth = max_recursion_depth;
+        self
+    }
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parses a complete Kyanos compilation unit from source text using default options.
 pub fn parse(source: &str) -> ParseOutput {
-    let mut parser = Parser::new(source);
+    parse_with_options(source, ParseOptions::default())
+}
+
+/// Parses a complete Kyanos compilation unit from source text with custom [`ParseOptions`].
+pub fn parse_with_options(source: &str, options: ParseOptions) -> ParseOutput {
+    let mut parser = Parser::with_options(source, options);
     let program = parser.parse_program();
     ParseOutput {
         program,
@@ -33,9 +69,14 @@ pub fn parse(source: &str) -> ParseOutput {
     }
 }
 
-/// Parses a single expression from source text, returning any recovered node and diagnostics.
+/// Parses a single expression from source text using default options, returning any recovered node and diagnostics.
 pub fn parse_expr(source: &str) -> (Expr, Vec<ParseError>) {
-    let mut parser = Parser::new(source);
+    parse_expr_with_options(source, ParseOptions::default())
+}
+
+/// Parses a single expression from source text with custom [`ParseOptions`].
+pub fn parse_expr_with_options(source: &str, options: ParseOptions) -> (Expr, Vec<ParseError>) {
+    let mut parser = Parser::with_options(source, options);
     let expr = parser.parse_expr_with_recovery();
     if !parser.is_eof() {
         let trailing = parser.current();
@@ -67,8 +108,12 @@ pub struct Parser<'a> {
     stream: TokenStream<'a>,
     errors: Vec<ParseError>,
     next_node_id: u32,
+    /// Parser configuration options including recursion limits.
+    options: ParseOptions,
     /// Nesting depth of `(...)` and `[...]` groupings allowing multiline expressions.
     pub(crate) grouping_depth: u32,
+    /// Current recursive-descent nesting depth guarded against `options.max_recursion_depth`.
+    pub(crate) recursion_depth: usize,
     /// Allows `else` to terminate an immediately enclosed braceless `if` then-branch.
     pub(crate) eos_allows_else: bool,
     /// Allows `while` to terminate an immediately enclosed braceless `do` body.
@@ -76,9 +121,14 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// Creates a new parser for the given Kyanos source code.
+    /// Creates a new parser for the given Kyanos source code using default options.
     pub fn new(source: &'a str) -> Self {
-        Self::with_offset(source, 0, 0)
+        Self::with_options(source, ParseOptions::default())
+    }
+
+    /// Creates a new parser for the given Kyanos source code with custom [`ParseOptions`].
+    pub fn with_options(source: &'a str, options: ParseOptions) -> Self {
+        Self::with_offset_and_state(source, 0, 0, 0, options)
     }
 
     /// Creates a parser with a starting byte offset and initial `NodeId` counter.
@@ -86,27 +136,59 @@ impl<'a> Parser<'a> {
     /// Used when recursively parsing embedded expressions (e.g. inside template strings)
     /// so generated `Span`s and `NodeId`s remain globally consistent within the module.
     pub fn with_offset(source: &'a str, base_offset: usize, start_node_id: u32) -> Self {
+        Self::with_offset_and_state(
+            source,
+            base_offset,
+            start_node_id,
+            0,
+            ParseOptions::default(),
+        )
+    }
+
+    /// Creates a parser with explicit offset, recursion depth, and options (for nested template parses).
+    pub(crate) fn with_offset_and_state(
+        source: &'a str,
+        base_offset: usize,
+        start_node_id: u32,
+        recursion_depth: usize,
+        options: ParseOptions,
+    ) -> Self {
         let (stream, errors) = TokenStream::with_offset(source, base_offset);
         Self {
             stream,
             errors,
             next_node_id: start_node_id,
+            options,
             grouping_depth: 0,
+            recursion_depth,
             eos_allows_else: false,
             eos_allows_while: false,
         }
     }
 
-    /// Creates a parser directly from an existing [`TokenStream`].
+    /// Creates a parser directly from an existing [`TokenStream`] using default options.
     pub fn from_stream(stream: TokenStream<'a>) -> Self {
+        Self::from_stream_with_options(stream, ParseOptions::default())
+    }
+
+    /// Creates a parser directly from an existing [`TokenStream`] with custom [`ParseOptions`].
+    pub fn from_stream_with_options(stream: TokenStream<'a>, options: ParseOptions) -> Self {
         Self {
             stream,
             errors: Vec::new(),
             next_node_id: 0,
+            options,
             grouping_depth: 0,
+            recursion_depth: 0,
             eos_allows_else: false,
             eos_allows_while: false,
         }
+    }
+
+    /// Returns the [`ParseOptions`] active for this parser instance.
+    #[inline]
+    pub const fn options(&self) -> ParseOptions {
+        self.options
     }
 
     /// Parses an entire Kyanos compilation unit into a [`Program`] AST.
@@ -298,6 +380,25 @@ impl<'a> Parser<'a> {
         let res = f(self);
         self.grouping_depth -= 1;
         res
+    }
+
+    /// Increments recursion depth, returning `Err` if `options.max_recursion_depth` is reached (CWE-674).
+    #[inline]
+    pub(crate) fn enter_recursion(&mut self) -> ParseResult<()> {
+        if self.recursion_depth >= self.options.max_recursion_depth {
+            return Err(ParseError::recursion_limit_with_max(
+                self.current_span(),
+                self.options.max_recursion_depth,
+            ));
+        }
+        self.recursion_depth += 1;
+        Ok(())
+    }
+
+    /// Decrements recursion depth after leaving a guarded parse routine.
+    #[inline]
+    pub(crate) fn exit_recursion(&mut self) {
+        self.recursion_depth -= 1;
     }
 
     // -------------------------------------------------------------------------

@@ -31,33 +31,62 @@ pub enum ParseErrorKind {
     InvalidAssignmentTarget,
     /// `const` declaration is missing its mandatory initializer (`= expr`).
     MissingInitializer,
+    /// Syntax nesting exceeded the parser's maximum recursion depth.
+    RecursionLimitExceeded,
     /// General contextual syntax error.
     SyntaxError(String),
 }
 
-/// A syntax diagnostic with source location and optional recovery hint.
+/// Heap-allocated payload for [`ParseError`] to keep stack frames compact.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    pub kind: ParseErrorKind,
-    pub span: Span,
-    pub message: String,
-    pub hint: Option<String>,
+struct ParseErrorInner {
+    kind: ParseErrorKind,
+    span: Span,
+    message: String,
+    hint: Option<String>,
 }
+
+/// A syntax diagnostic with source location and optional recovery hint.
+///
+/// The payload is boxed so `Result<T, ParseError>` remains pointer-sized on
+/// recursive parser paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError(Box<ParseErrorInner>);
 
 impl ParseError {
     /// Creates a new parse error with an explicit kind, span, and message.
     pub fn new(kind: ParseErrorKind, span: Span, message: impl Into<String>) -> Self {
-        Self {
+        Self(Box::new(ParseErrorInner {
             kind,
             span,
             message: message.into(),
             hint: None,
-        }
+        }))
+    }
+
+    /// Returns the error category.
+    pub fn kind(&self) -> &ParseErrorKind {
+        &self.0.kind
+    }
+
+    /// Returns the source span where the error occurred.
+    pub fn span(&self) -> Span {
+        self.0.span
+    }
+
+    /// Returns the human-readable error message.
+    pub fn message(&self) -> &str {
+        &self.0.message
+    }
+
+    /// Returns the optional developer-facing recovery hint.
+    pub fn hint(&self) -> Option<&str> {
+        self.0.hint.as_deref()
     }
 
     /// Attaches an optional developer-facing recovery hint to this error.
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
+        self.0.hint = Some(hint.into());
         self
     }
 
@@ -111,6 +140,20 @@ impl ParseError {
         let msg = message.into();
         Self::new(ParseErrorKind::SyntaxError(msg.clone()), span, msg)
     }
+
+    /// Constructs a diagnostic when syntax nesting exceeds [`crate::MAX_RECURSION_DEPTH`].
+    pub fn recursion_limit(span: Span) -> Self {
+        Self::recursion_limit_with_max(span, crate::MAX_RECURSION_DEPTH)
+    }
+
+    /// Constructs a diagnostic when syntax nesting exceeds an explicit `max_depth` limit.
+    pub fn recursion_limit_with_max(span: Span, max_depth: usize) -> Self {
+        Self::new(
+            ParseErrorKind::RecursionLimitExceeded,
+            span,
+            format!("Maximum syntax recursion depth ({}) exceeded", max_depth),
+        )
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -118,9 +161,11 @@ impl fmt::Display for ParseError {
         write!(
             f,
             "{} (at {}..{})",
-            self.message, self.span.start, self.span.end
+            self.message(),
+            self.span().start,
+            self.span().end
         )?;
-        if let Some(hint) = &self.hint {
+        if let Some(hint) = self.hint() {
             write!(f, " [hint: {}]", hint)?;
         }
         Ok(())

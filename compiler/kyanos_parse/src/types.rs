@@ -57,6 +57,13 @@ impl<'a> Parser<'a> {
 
     /// Parses a type annotation: `functionType | prefixType | typeOrPostfix`.
     pub fn parse_type(&mut self) -> ParseResult<Type> {
+        self.enter_recursion()?;
+        let res = self.parse_type_inner();
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_type_inner(&mut self) -> ParseResult<Type> {
         // 1. Generic function type: `<T>(params) => returnType`
         if self.at(TokenKind::LessThan) {
             return self.parse_function_type(true);
@@ -273,11 +280,7 @@ impl<'a> Parser<'a> {
                 let span = self.span_from(start);
                 let id = self.alloc_id();
                 return Ok(Some(
-                    Type::new(
-                        TypeKind::Function(FunctionType::new(None, params, ret, span)),
-                        span,
-                    )
-                    .with_id(id),
+                    Type::function(FunctionType::new(None, params, ret, span), span).with_id(id),
                 ));
             }
             if definitely_fn {
@@ -302,13 +305,8 @@ impl<'a> Parser<'a> {
         let return_type = self.parse_return_type()?;
         let span = self.span_from(start);
         let id = self.alloc_id();
-        Ok(Type::new(
-            TypeKind::Function(FunctionType::new(
-                type_parameters,
-                params,
-                return_type,
-                span,
-            )),
+        Ok(Type::function(
+            FunctionType::new(type_parameters, params, return_type, span),
             span,
         )
         .with_id(id))
