@@ -356,8 +356,20 @@ impl<'a> Parser<'a> {
 
     #[inline(never)]
     fn try_parse_generic_postfix(&mut self, lhs: &Expr) -> ParseResult<Option<Expr>> {
+        if !self.can_start_type_at(1) {
+            return Ok(None);
+        }
+        let memo_key = self.memo_pos_key();
+        if let Some(key) = memo_key {
+            if self.memo.failed_generic_postfix.contains(&key)
+                || self.memo.failed_type_arguments.contains(&key)
+            {
+                return Ok(None);
+            }
+        }
+
         let cp = self.checkpoint();
-        if let Ok(type_args) = self.parse_type_arguments() {
+        if let Some(type_args) = self.try_parse_type_arguments() {
             let next = self.current();
             if next.kind == TokenKind::OpenParen
                 && (self.grouping_depth > 0 || !next.has_leading_newline)
@@ -375,6 +387,9 @@ impl<'a> Parser<'a> {
             }
         }
         self.restore(cp);
+        if let Some(key) = memo_key {
+            self.memo.failed_generic_postfix.insert(key);
+        }
         Ok(None)
     }
 
@@ -928,13 +943,25 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::OpenParen, "'('")?;
 
         let target = self.with_grouping(|p| {
-            let cp = p.checkpoint();
-            if let Ok(ty) = p.parse_type() {
-                if p.at(TokenKind::CloseParen) {
-                    return Ok(SizeofTarget::Type(Box::new(ty)));
+            let memo_key = p.memo_pos_key();
+            let should_try_type = p.can_start_type()
+                && memo_key.is_none_or(|key| !p.memo.failed_sizeof_types.contains(&key));
+            if should_try_type {
+                let cp = p.checkpoint();
+                let cache_failure = match p.parse_type() {
+                    Ok(ty) if p.at(TokenKind::CloseParen) => {
+                        return Ok(SizeofTarget::Type(Box::new(ty)));
+                    }
+                    Ok(_) => true,
+                    Err(err) => *err.kind() != ParseErrorKind::RecursionLimitExceeded,
+                };
+                p.restore(cp);
+                if cache_failure {
+                    if let Some(key) = memo_key {
+                        p.memo.failed_sizeof_types.insert(key);
+                    }
                 }
             }
-            p.restore(cp);
             let expr = p.parse_expr()?;
             Ok(SizeofTarget::Expr(Box::new(expr)))
         })?;
@@ -977,13 +1004,7 @@ impl<'a> Parser<'a> {
         }
 
         let type_arguments = if self.at(TokenKind::LessThan) {
-            let cp = self.checkpoint();
-            if let Ok(ta) = self.parse_type_arguments() {
-                Some(ta)
-            } else {
-                self.restore(cp);
-                None
-            }
+            self.try_parse_type_arguments()
         } else {
             None
         };

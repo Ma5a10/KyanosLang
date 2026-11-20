@@ -1819,3 +1819,112 @@ fn test_parse_options_custom_recursion_depth() {
     );
     assert!(matches!(deep_expr.kind, ExprKind::Parenthesized(_)));
 }
+
+#[test]
+fn test_avoid_exponential_backtracking_in_types() {
+    // 1. Deeply nested parenthesized types must parse linearly (would take 2^64 without pre-scan/memo).
+    let deep_paren_ty = format!("{}int{}", "(".repeat(64), ")".repeat(64));
+    let mut ty_parser = Parser::new(&deep_paren_ty);
+    let parsed_ty = ty_parser
+        .parse_type()
+        .expect("64-deep parenthesized type should parse without exponential blowup");
+    assert!(ty_parser.errors().is_empty());
+    assert!(matches!(parsed_ty.kind, TypeKind::Parenthesized(_)));
+
+    // 2. Parenthesized function types and higher-order function types still parse accurately.
+    let nested_fn = parse_type_ok("(((int) => void))");
+    assert!(matches!(nested_fn.kind, TypeKind::Parenthesized(_)));
+
+    let higher_order = parse_type_ok("(((int) => void) => bool)");
+    let TypeKind::Parenthesized(inner_fn) = higher_order.kind else {
+        panic!("expected outer Parenthesized type");
+    };
+    let TypeKind::Function(fn_ty) = inner_fn.kind else {
+        panic!("expected Function type inside parens");
+    };
+    assert_eq!(fn_ty.params.len(), 1);
+    assert!(matches!(fn_ty.params[0].ty.kind, TypeKind::Function(_)));
+
+    // 3. Option A: missing `=>` in function-like type annotation falls back and errors cleanly.
+    let mut missing_arrow = Parser::new("(a: int, b: string)");
+    assert!(missing_arrow.parse_type().is_err());
+}
+
+#[test]
+fn test_avoid_exponential_backtracking_in_sizeof_and_generics() {
+    // 1. Nested `sizeof(A[sizeof(...) + 1] + 1)` must avoid 2^N reparsing.
+    let mut nested_sizeof = "A[0] + 1".to_string();
+    for _ in 0..48 {
+        nested_sizeof = format!("sizeof(A[{}] + 1)", nested_sizeof);
+    }
+    let (sizeof_expr, sizeof_errs) = parse_expr(&nested_sizeof);
+    assert!(
+        sizeof_errs.is_empty(),
+        "unexpected errors: {:?}",
+        sizeof_errs
+    );
+    assert!(matches!(
+        &sizeof_expr.kind,
+        ExprKind::Sizeof(SizeofTarget::Expr(_))
+    ));
+
+    // Confirm valid sizeof(type) and sizeof(expr) distinctions remain intact.
+    let sizeof_ty = parse_expr_ok("sizeof(int[4])");
+    assert!(matches!(
+        sizeof_ty.kind,
+        ExprKind::Sizeof(SizeofTarget::Type(_))
+    ));
+
+    // 2. Long chained `<` comparisons must avoid O(N^2) rescanning.
+    let chain = (0..1500)
+        .map(|i| format!("x{i}"))
+        .collect::<Vec<_>>()
+        .join(" < ");
+    let (chain_expr, chain_errs) = parse_expr(&chain);
+    assert!(chain_errs.is_empty(), "unexpected errors: {:?}", chain_errs);
+    assert!(matches!(
+        chain_expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Lt,
+            ..
+        }
+    ));
+
+    // 3. Mixed generic call inside a relational `<` chain still parses accurately.
+    let mixed = parse_expr_ok("a < b<int>(1) < c");
+    let ExprKind::Binary {
+        op: BinaryOp::Lt,
+        left,
+        ..
+    } = mixed.kind
+    else {
+        panic!("expected outer Lt");
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::Lt,
+        right: mid,
+        ..
+    } = left.kind
+    else {
+        panic!("expected inner Lt");
+    };
+    assert!(matches!(mid.kind, ExprKind::Call { .. }));
+
+    // 4. `new` followed by chained `<` comparisons avoids quadratic backtracking.
+    let new_chain = format!(
+        "new {}",
+        (0..80)
+            .map(|i| format!("x{i}"))
+            .collect::<Vec<_>>()
+            .join(" < ")
+    );
+    let (new_expr, new_errs) = parse_expr(&new_chain);
+    assert!(new_errs.is_empty(), "unexpected errors: {:?}", new_errs);
+    assert!(matches!(
+        new_expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Lt,
+            ..
+        }
+    ));
+}

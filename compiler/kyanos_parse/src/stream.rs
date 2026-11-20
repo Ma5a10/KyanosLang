@@ -6,6 +6,8 @@
 
 //! Buffered token stream with trivia filtering, checkpointing, and generic `>` splitting.
 
+use std::collections::HashSet;
+
 use kyanos_ast::Span;
 use kyanos_lexer::{Lexer, Token, TokenKind};
 
@@ -258,5 +260,89 @@ impl<'a> TokenStream<'a> {
         self.cursor = cp.cursor;
         self.virtual_token = cp.virtual_token;
         self.last_span = cp.last_span;
+    }
+
+    /// Returns the raw token cursor when no split `virtual_token` is active, for memoization keys.
+    #[inline]
+    pub(crate) fn memo_cursor(&self) -> Option<usize> {
+        if self.virtual_token.is_none() {
+            Some(self.cursor)
+        } else {
+            None
+        }
+    }
+
+    /// Scans from the current `(` to its matching `)` without recursion and checks whether `=>`
+    /// immediately follows. Every `(` encountered whose matching `)` is not followed by `=>` is
+    /// memoized in `non_arrow_cache` so nested parenthesized types resolve in O(N) total time.
+    pub(crate) fn scan_paren_has_arrow(&self, non_arrow_cache: &mut HashSet<usize>) -> bool {
+        if self.virtual_token.is_some() {
+            return false;
+        }
+        let start = self.cursor;
+        if non_arrow_cache.contains(&start) {
+            return false;
+        }
+        if self.tokens.get(start).map(|t| t.kind) != Some(TokenKind::OpenParen) {
+            return false;
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Delim {
+            Paren,
+            Bracket,
+            Brace,
+        }
+
+        let mut stack: Vec<(Delim, usize)> = Vec::new();
+        let mut idx = start;
+        while idx < self.tokens.len() {
+            match self.tokens[idx].kind {
+                TokenKind::OpenParen => stack.push((Delim::Paren, idx)),
+                TokenKind::OpenBracket => stack.push((Delim::Bracket, idx)),
+                TokenKind::OpenBrace => stack.push((Delim::Brace, idx)),
+                TokenKind::CloseParen => {
+                    if let Some((Delim::Paren, open_idx)) = stack.last().copied() {
+                        stack.pop();
+                        let has_arrow = self
+                            .tokens
+                            .get(idx + 1)
+                            .is_some_and(|tok| tok.kind == TokenKind::Arrow);
+                        if !has_arrow {
+                            non_arrow_cache.insert(open_idx);
+                        }
+                        if stack.is_empty() {
+                            return has_arrow;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                TokenKind::CloseBracket => {
+                    if let Some((Delim::Bracket, _)) = stack.last() {
+                        stack.pop();
+                    } else {
+                        break;
+                    }
+                }
+                TokenKind::CloseBrace => {
+                    if let Some((Delim::Brace, _)) = stack.last() {
+                        stack.pop();
+                    } else {
+                        break;
+                    }
+                }
+                TokenKind::Eof => break,
+                _ => {}
+            }
+            idx += 1;
+        }
+
+        for (delim, open_idx) in stack {
+            if delim == Delim::Paren {
+                non_arrow_cache.insert(open_idx);
+            }
+        }
+        false
     }
 }

@@ -13,8 +13,25 @@ use kyanos_ast::{
 };
 use kyanos_lexer::TokenKind;
 
-use crate::error::{ParseError, ParseResult};
+use crate::error::{ParseError, ParseErrorKind, ParseResult};
 use crate::Parser;
+
+/// Returns `true` if `kind` can begin a Kyanos type annotation.
+#[inline]
+pub(crate) fn can_start_type_kind(kind: TokenKind) -> bool {
+    token_to_predefined_type(kind).is_some()
+        || matches!(
+            kind,
+            TokenKind::Identifier
+                | TokenKind::LessThan
+                | TokenKind::OpenParen
+                | TokenKind::Star
+                | TokenKind::And
+                | TokenKind::OpenBracket
+                | TokenKind::OpenBrace
+                | TokenKind::This
+        )
+}
 
 /// Maps a primitive type token kind to [`PredefinedType`], or `None` otherwise.
 #[inline]
@@ -42,6 +59,18 @@ pub fn token_to_predefined_type(kind: TokenKind) -> Option<PredefinedType> {
 }
 
 impl<'a> Parser<'a> {
+    /// Returns `true` if the current token can begin a type annotation.
+    #[inline]
+    pub(crate) fn can_start_type(&self) -> bool {
+        can_start_type_kind(self.current_kind())
+    }
+
+    /// Returns `true` if the token `offset` positions ahead can begin a type annotation.
+    #[inline]
+    pub(crate) fn can_start_type_at(&self, offset: usize) -> bool {
+        can_start_type_kind(self.peek_kind(offset))
+    }
+
     /// Parses a return type annotation (`type_` or `Identifier is type_`).
     pub fn parse_return_type(&mut self) -> ParseResult<ReturnType> {
         if self.at(TokenKind::Identifier) && self.peek_kind(1) == TokenKind::Is {
@@ -267,30 +296,16 @@ impl<'a> Parser<'a> {
             return self.parse_function_type(false).map(Some);
         }
 
-        let cp = self.checkpoint();
-        let start = self.current_span();
-        if let Ok(params) = self.parse_function_type_param_list() {
-            let definitely_fn = params.len() > 1
-                || params
-                    .iter()
-                    .any(|p| p.name.is_some() || p.is_readonly || p.is_optional || p.is_rest);
-            if self.at(TokenKind::Arrow) {
-                self.bump(); // consume '=>'
-                let ret = self.parse_return_type()?;
-                let span = self.span_from(start);
-                let id = self.alloc_id();
-                return Ok(Some(
-                    Type::function(FunctionType::new(None, params, ret, span), span).with_id(id),
-                ));
-            }
-            if definitely_fn {
-                let tok = self.current();
-                return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
-            }
+        // Pre-scan without recursion so deeply nested `((((T))))` skips speculative function
+        // parsing in O(N) total time when no `=>` follows the matching `)`.
+        if !self
+            .stream
+            .scan_paren_has_arrow(&mut self.memo.non_arrow_type_parens)
+        {
+            return Ok(None);
         }
 
-        self.restore(cp);
-        Ok(None)
+        self.parse_function_type(false).map(Some)
     }
 
     fn parse_function_type(&mut self, with_type_params: bool) -> ParseResult<Type> {
@@ -389,6 +404,19 @@ impl<'a> Parser<'a> {
 
     /// Parses a generic type argument list: `<T, U>`.
     pub fn parse_type_arguments(&mut self) -> ParseResult<TypeArguments> {
+        let memo_key = self.memo_pos_key();
+        let res = self.parse_type_arguments_inner();
+        if let Err(ref err) = res {
+            if *err.kind() != ParseErrorKind::RecursionLimitExceeded {
+                if let Some(key) = memo_key {
+                    self.memo.failed_type_arguments.insert(key);
+                }
+            }
+        }
+        res
+    }
+
+    fn parse_type_arguments_inner(&mut self) -> ParseResult<TypeArguments> {
         let open = self.expect(TokenKind::LessThan, "'<'")?;
         let mut args = Vec::new();
 
@@ -402,6 +430,27 @@ impl<'a> Parser<'a> {
         self.expect_generic_gt("'>'")?;
         let span = self.span_from(open.span);
         Ok(TypeArguments::new(args, span))
+    }
+
+    /// Speculatively parses `<T, U>`, using start-token guards and failed-position memoization
+    /// so chained relational `<` expressions avoid quadratic rescanning.
+    pub(crate) fn try_parse_type_arguments(&mut self) -> Option<TypeArguments> {
+        if !self.can_start_type_at(1) {
+            return None;
+        }
+        if let Some(key) = self.memo_pos_key() {
+            if self.memo.failed_type_arguments.contains(&key) {
+                return None;
+            }
+        }
+        let cp = self.checkpoint();
+        match self.parse_type_arguments() {
+            Ok(args) => Some(args),
+            Err(_) => {
+                self.restore(cp);
+                None
+            }
+        }
     }
 
     /// Parses a generic type parameter declaration list: `<T extends Bound = Default>`.

@@ -17,6 +17,8 @@ pub mod stmt;
 pub mod stream;
 pub mod types;
 
+use std::collections::HashSet;
+
 use kyanos_ast::{Expr, NodeId, Program, Span};
 use kyanos_lexer::{Token, TokenKind};
 
@@ -103,6 +105,19 @@ impl ParseOutput {
     }
 }
 
+/// Memoization caches preventing exponential/quadratic backtracking across speculative parser paths (CWE-407).
+#[derive(Debug, Default)]
+pub(crate) struct BacktrackMemo {
+    /// Token indices of `(` in `parse_type` whose matching `)` is not followed by `=>`.
+    pub(crate) non_arrow_type_parens: HashSet<usize>,
+    /// `(cursor, in_grouping)` keys where `sizeof(<type>)` failed and must fall back to an expression.
+    pub(crate) failed_sizeof_types: HashSet<(usize, bool)>,
+    /// `(cursor, in_grouping)` keys where `parse_type_arguments` failed with a syntax error.
+    pub(crate) failed_type_arguments: HashSet<(usize, bool)>,
+    /// `(cursor, in_grouping)` keys where `try_parse_generic_postfix` did not form a generic call/init.
+    pub(crate) failed_generic_postfix: HashSet<(usize, bool)>,
+}
+
 /// Handcrafted fault-tolerant recursive-descent + Pratt parser for Kyanos.
 pub struct Parser<'a> {
     stream: TokenStream<'a>,
@@ -110,6 +125,8 @@ pub struct Parser<'a> {
     next_node_id: u32,
     /// Parser configuration options including recursion limits.
     options: ParseOptions,
+    /// Memoization caches preserved across speculative `restore` calls.
+    pub(crate) memo: BacktrackMemo,
     /// Nesting depth of `(...)` and `[...]` groupings allowing multiline expressions.
     pub(crate) grouping_depth: u32,
     /// Current recursive-descent nesting depth guarded against `options.max_recursion_depth`.
@@ -159,6 +176,7 @@ impl<'a> Parser<'a> {
             errors,
             next_node_id: start_node_id,
             options,
+            memo: BacktrackMemo::default(),
             grouping_depth: 0,
             recursion_depth,
             eos_allows_else: false,
@@ -178,6 +196,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             next_node_id: 0,
             options,
+            memo: BacktrackMemo::default(),
             grouping_depth: 0,
             recursion_depth: 0,
             eos_allows_else: false,
@@ -367,6 +386,14 @@ impl<'a> Parser<'a> {
         self.stream.restore_position(&cp);
         self.errors.truncate(cp.error_len);
         self.grouping_depth = cp.grouping_depth;
+    }
+
+    /// Returns a memoization key `(cursor, in_grouping)` when no split virtual token is active.
+    #[inline]
+    pub(crate) fn memo_pos_key(&self) -> Option<(usize, bool)> {
+        self.stream
+            .memo_cursor()
+            .map(|cursor| (cursor, self.grouping_depth > 0))
     }
 
     /// Executes `f` inside a delimited grouping (`(...)` or `[...]`), permitting
