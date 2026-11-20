@@ -1928,3 +1928,126 @@ fn test_avoid_exponential_backtracking_in_sizeof_and_generics() {
         }
     ));
 }
+
+#[test]
+fn test_parenthesized_expressions_disambiguated_from_arrow_params() {
+    // 1. Arrow functions returning parenthesized object literals.
+    let obj_arrow_1 = parse_expr_ok("() => ({ x: y })");
+    let ExprKind::ArrowFunction(af1) = obj_arrow_1.kind else {
+        panic!("expected ArrowFunction");
+    };
+    let ArrowBody::Expr(body1) = af1.body else {
+        panic!("expected Expr body");
+    };
+    assert!(matches!(
+        body1.kind,
+        ExprKind::Parenthesized(ref inner) if matches!(inner.kind, ExprKind::Object(_))
+    ));
+
+    let obj_arrow_2 = parse_expr_ok("() => ({ x, y })");
+    let ExprKind::ArrowFunction(af2) = obj_arrow_2.kind else {
+        panic!("expected ArrowFunction");
+    };
+    let ArrowBody::Expr(body2) = af2.body else {
+        panic!("expected Expr body");
+    };
+    assert!(matches!(
+        body2.kind,
+        ExprKind::Parenthesized(ref inner) if matches!(inner.kind, ExprKind::Object(_))
+    ));
+
+    // 2. Parenthesized array literals (with member access and spread elements).
+    let arr_member = parse_expr_ok("([1, 2, 3]).length");
+    assert!(matches!(
+        arr_member.kind,
+        ExprKind::Member {
+            ref target,
+            is_optional: false,
+            ..
+        } if matches!(
+            target.kind,
+            ExprKind::Parenthesized(ref inner) if matches!(inner.kind, ExprKind::Array(_))
+        )
+    ));
+
+    let arr_spread = parse_expr_ok("([a, ...rest])");
+    assert!(matches!(
+        arr_spread.kind,
+        ExprKind::Parenthesized(ref inner) if matches!(inner.kind, ExprKind::Array(_))
+    ));
+
+    // 3. Parenthesized assignments, `while` condition idiom, and sequence expressions.
+    let paren_assign = parse_expr_ok("(a = 1)");
+    assert!(matches!(
+        paren_assign.kind,
+        ExprKind::Parenthesized(ref inner) if matches!(inner.kind, ExprKind::Assign { .. })
+    ));
+
+    let while_assign = parse_stmt_ok("while ((c = next()) != null) {}");
+    assert!(matches!(while_assign.kind, StmtKind::While(_)));
+
+    let seq_assign = parse_expr_ok("(a, b = 1)");
+    assert!(matches!(
+        seq_assign.kind,
+        ExprKind::Sequence(ref items)
+            if items.len() == 2 && matches!(items[1].kind, ExprKind::Assign { .. })
+    ));
+
+    let seq_arr = parse_expr_ok("(a, [1, 2])");
+    assert!(matches!(
+        seq_arr.kind,
+        ExprKind::Sequence(ref items)
+            if items.len() == 2 && matches!(items[1].kind, ExprKind::Array(_))
+    ));
+
+    // 4. Ternary `:` immediately following parenthesized object/assignment expressions.
+    let ternary_obj = parse_expr_ok("cond ? ({ x: y }) : ({ a: b })");
+    assert!(matches!(
+        ternary_obj.kind,
+        ExprKind::Ternary {
+            ref then_expr,
+            ref else_expr,
+            ..
+        } if matches!(then_expr.kind, ExprKind::Parenthesized(_))
+            && matches!(else_expr.kind, ExprKind::Parenthesized(_))
+    ));
+
+    let ternary_assign = parse_expr_ok("cond ? (a = 1) : b");
+    assert!(matches!(
+        ternary_assign.kind,
+        ExprKind::Ternary {
+            ref then_expr,
+            ..
+        } if matches!(then_expr.kind, ExprKind::Parenthesized(_))
+    ));
+
+    // 5. Destructuring & default-value arrow functions still parse as ArrowFunction when `=>` follows.
+    let destruct_arrow = parse_expr_ok("([a, b], { x, y = 1 }): int => x + y + a");
+    let ExprKind::ArrowFunction(af_destruct) = destruct_arrow.kind else {
+        panic!("expected destructuring ArrowFunction");
+    };
+    assert_eq!(af_destruct.params.params.len(), 2);
+    assert!(af_destruct.return_type.is_some());
+
+    // 6. Deeply nested `(a = (b = ... = 1))` avoids O(2^N) fallback blowup.
+    // Note: each `(v = ...)` nesting consumes 2 recursion levels (grouping + assign rhs),
+    // so 48 levels reach depth ~97 (< MAX_RECURSION_DEPTH = 128) while still exceeding 2^48 if exponential.
+    let mut deep_assign = "v48 = 1".to_string();
+    for i in (0..48).rev() {
+        deep_assign = format!("v{i} = ({deep_assign})");
+    }
+    let deep_nested = format!("({deep_assign})");
+    let (deep_expr, deep_errs) = parse_expr(&deep_nested);
+    assert!(deep_errs.is_empty(), "unexpected errors: {:?}", deep_errs);
+    assert!(matches!(deep_expr.kind, ExprKind::Parenthesized(_)));
+
+    // Also nested ternary + assignment chain to exercise `failed_arrow_expr_parens`.
+    let mut deep_ternary_inner = "x = 1".to_string();
+    for i in 0..40 {
+        deep_ternary_inner = format!("(t{i} = {deep_ternary_inner})");
+    }
+    let deep_ternary = format!("cond ? {deep_ternary_inner} : fallback");
+    let (dt_expr, dt_errs) = parse_expr(&deep_ternary);
+    assert!(dt_errs.is_empty(), "unexpected errors: {:?}", dt_errs);
+    assert!(matches!(dt_expr.kind, ExprKind::Ternary { .. }));
+}

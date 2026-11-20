@@ -110,6 +110,10 @@ impl ParseOutput {
 pub(crate) struct BacktrackMemo {
     /// Token indices of `(` in `parse_type` whose matching `)` is not followed by `=>`.
     pub(crate) non_arrow_type_parens: HashSet<usize>,
+    /// Token indices of `(` in `parse_paren_or_arrow_expr` whose matching `)` is followed by neither `=>` nor `:`.
+    pub(crate) non_arrow_expr_parens: HashSet<usize>,
+    /// `(cursor, in_grouping)` keys where speculative arrow parameter parsing failed and must parse as parenthesized expr.
+    pub(crate) failed_arrow_expr_parens: HashSet<(usize, bool)>,
     /// `(cursor, in_grouping)` keys where `sizeof(<type>)` failed and must fall back to an expression.
     pub(crate) failed_sizeof_types: HashSet<(usize, bool)>,
     /// `(cursor, in_grouping)` keys where `parse_type_arguments` failed with a syntax error.

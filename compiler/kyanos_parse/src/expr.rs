@@ -550,38 +550,71 @@ impl<'a> Parser<'a> {
             return Ok(Expr::literal(Literal::unit(paren_span)).with_id(id));
         }
 
+        // Pre-scan without recursion: if the matching `)` is followed by neither `=>` nor `:`,
+        // this cannot be `(params) (: ret)? => body`, so jump straight to parenthesized expression.
+        let memo_key = self.memo_pos_key();
+        let can_try_arrow = self
+            .stream
+            .scan_paren_followed_by(&mut self.memo.non_arrow_expr_parens, true)
+            && memo_key.is_none_or(|key| !self.memo.failed_arrow_expr_parens.contains(&key));
+
+        if !can_try_arrow {
+            return self.parse_parenthesized_sequence();
+        }
+
         let start = self.current_span();
         let cp = self.checkpoint();
+        let mut cache_arrow_failure = true;
 
         // Speculatively parse as an arrow parameter list `(params) (: ret)? => body`.
-        if let Ok(params) = self.with_grouping(|p| p.parse_parameter_list()) {
-            let definitely_params = params_require_arrow(&params);
-            let return_type = if self.eat(TokenKind::Colon).is_some() {
-                match self.parse_return_type() {
-                    Ok(rt) => Some(rt),
-                    Err(err) => {
-                        if definitely_params {
-                            return Err(err);
+        match self.with_grouping(|p| p.parse_parameter_list()) {
+            Ok(params) => {
+                let definitely_params = params_require_arrow(&params);
+                let return_type = if self.eat(TokenKind::Colon).is_some() {
+                    match self.parse_return_type() {
+                        Ok(rt) => Some(rt),
+                        Err(err) => {
+                            if *err.kind() == ParseErrorKind::RecursionLimitExceeded {
+                                cache_arrow_failure = false;
+                            }
+                            if definitely_params {
+                                return Err(err);
+                            }
+                            self.restore(cp);
+                            if cache_arrow_failure {
+                                if let Some(key) = memo_key {
+                                    self.memo.failed_arrow_expr_parens.insert(key);
+                                }
+                            }
+                            return self.parse_parenthesized_sequence();
                         }
-                        self.restore(cp);
-                        return self.parse_parenthesized_sequence();
                     }
+                } else {
+                    None
+                };
+
+                if self.at(TokenKind::Arrow) {
+                    return self.finish_arrow_function(start, false, None, params, return_type);
                 }
-            } else {
-                None
-            };
 
-            if self.at(TokenKind::Arrow) {
-                return self.finish_arrow_function(start, false, None, params, return_type);
+                if definitely_params {
+                    let tok = self.current();
+                    return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
+                }
             }
-
-            if definitely_params {
-                let tok = self.current();
-                return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
+            Err(err) => {
+                if *err.kind() == ParseErrorKind::RecursionLimitExceeded {
+                    cache_arrow_failure = false;
+                }
             }
         }
 
         self.restore(cp);
+        if cache_arrow_failure {
+            if let Some(key) = memo_key {
+                self.memo.failed_arrow_expr_parens.insert(key);
+            }
+        }
         self.parse_parenthesized_sequence()
     }
 
@@ -1212,7 +1245,10 @@ fn collect_type_name_parts(expr: &Expr, parts: &mut Vec<Ident>) -> Option<()> {
 }
 
 /// Returns `true` if `params` uses syntax that cannot appear in a parenthesized expression
-/// (modifiers, type annotations, `?` optionality, default values, or `...rest`).
+/// (modifiers, type annotations, `?` optionality, wildcard `_`, or `...rest`).
+///
+/// Default values (`a = 1`) and tuple/object destructuring shapes (`[a, b]`, `{ x, y }`) are
+/// intentionally excluded because they also match valid parenthesized assignments/literals.
 fn params_require_arrow(params: &ParameterList) -> bool {
     if params.rest.is_some() {
         return true;
@@ -1222,7 +1258,6 @@ fn params_require_arrow(params: &ParameterList) -> bool {
             || p.is_readonly
             || p.is_optional
             || p.ty.is_some()
-            || p.default.is_some()
-            || !matches!(p.target, kyanos_ast::BindingTarget::Ident(_))
+            || matches!(p.target, kyanos_ast::BindingTarget::Wildcard(_))
     })
 }

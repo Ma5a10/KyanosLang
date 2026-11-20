@@ -300,7 +300,7 @@ impl<'a> Parser<'a> {
         // parsing in O(N) total time when no `=>` follows the matching `)`.
         if !self
             .stream
-            .scan_paren_has_arrow(&mut self.memo.non_arrow_type_parens)
+            .scan_paren_followed_by(&mut self.memo.non_arrow_type_parens, false)
         {
             return Ok(None);
         }

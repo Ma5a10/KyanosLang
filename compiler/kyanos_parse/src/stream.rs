@@ -273,14 +273,19 @@ impl<'a> TokenStream<'a> {
     }
 
     /// Scans from the current `(` to its matching `)` without recursion and checks whether `=>`
-    /// immediately follows. Every `(` encountered whose matching `)` is not followed by `=>` is
-    /// memoized in `non_arrow_cache` so nested parenthesized types resolve in O(N) total time.
-    pub(crate) fn scan_paren_has_arrow(&self, non_arrow_cache: &mut HashSet<usize>) -> bool {
+    /// (or `:` when `allow_colon` is `true`) immediately follows. Every `(` encountered whose
+    /// matching `)` is not followed by one of those tokens is memoized in `non_matching_cache` so
+    /// deeply nested parenthesized types and expressions resolve in O(N) total time.
+    pub(crate) fn scan_paren_followed_by(
+        &self,
+        non_matching_cache: &mut HashSet<usize>,
+        allow_colon: bool,
+    ) -> bool {
         if self.virtual_token.is_some() {
             return false;
         }
         let start = self.cursor;
-        if non_arrow_cache.contains(&start) {
+        if non_matching_cache.contains(&start) {
             return false;
         }
         if self.tokens.get(start).map(|t| t.kind) != Some(TokenKind::OpenParen) {
@@ -304,15 +309,15 @@ impl<'a> TokenStream<'a> {
                 TokenKind::CloseParen => {
                     if let Some((Delim::Paren, open_idx)) = stack.last().copied() {
                         stack.pop();
-                        let has_arrow = self
-                            .tokens
-                            .get(idx + 1)
-                            .is_some_and(|tok| tok.kind == TokenKind::Arrow);
-                        if !has_arrow {
-                            non_arrow_cache.insert(open_idx);
+                        let matches_follow = self.tokens.get(idx + 1).is_some_and(|tok| {
+                            tok.kind == TokenKind::Arrow
+                                || (allow_colon && tok.kind == TokenKind::Colon)
+                        });
+                        if !matches_follow {
+                            non_matching_cache.insert(open_idx);
                         }
                         if stack.is_empty() {
-                            return has_arrow;
+                            return matches_follow;
                         }
                     } else {
                         break;
@@ -340,7 +345,7 @@ impl<'a> TokenStream<'a> {
 
         for (delim, open_idx) in stack {
             if delim == Delim::Paren {
-                non_arrow_cache.insert(open_idx);
+                non_matching_cache.insert(open_idx);
             }
         }
         false
