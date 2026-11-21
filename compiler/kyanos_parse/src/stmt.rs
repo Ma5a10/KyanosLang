@@ -32,10 +32,12 @@ impl<'a> Parser<'a> {
         self.eos_allows_while = false;
 
         let mut statements = Vec::new();
-        while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            let stmt = self.parse_block_item();
-            statements.push(stmt);
-        }
+        self.with_isolated_ternary_scope(|p| {
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                let stmt = p.parse_block_item();
+                statements.push(stmt);
+            }
+        });
 
         self.eos_allows_else = prev_else;
         self.eos_allows_while = prev_while;
@@ -378,7 +380,10 @@ impl<'a> Parser<'a> {
         if self.eat(TokenKind::Case).is_some() {
             let pattern = self.parse_pattern()?;
             let guard = if self.eat(TokenKind::When).is_some() {
-                Some(self.parse_expr()?)
+                self.pending_ternary_then += 1;
+                let guard_res = self.parse_expr();
+                self.pending_ternary_then -= 1;
+                Some(guard_res?)
             } else {
                 None
             };

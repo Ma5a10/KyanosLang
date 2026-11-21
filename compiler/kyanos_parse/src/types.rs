@@ -135,7 +135,11 @@ impl<'a> Parser<'a> {
             if self.grouping_depth == 0 && self.current().has_leading_newline {
                 break;
             }
-            if self.eat(TokenKind::Question).is_some() {
+            if self.at(TokenKind::Question) {
+                if self.should_defer_question_to_ternary() {
+                    break;
+                }
+                self.bump();
                 let span = self.span_from(ty.span);
                 let id = self.alloc_id();
                 ty = Type::optional(ty, span).with_id(id);
@@ -157,6 +161,21 @@ impl<'a> Parser<'a> {
         }
 
         Ok(ty)
+    }
+
+    #[inline]
+    fn should_defer_question_to_ternary(&mut self) -> bool {
+        if !self.stop_optional_before_ternary {
+            return false;
+        }
+        if !crate::expr::can_start_expr_kind(self.peek_kind(1)) {
+            return false;
+        }
+        self.stream.has_ternary_colon_from_question(
+            self.pending_ternary_then,
+            &mut self.memo.no_colon_after_questions,
+            crate::expr::can_start_expr_kind,
+        )
     }
 
     fn parse_array_size(&mut self) -> ParseResult<ArraySize> {
@@ -231,58 +250,60 @@ impl<'a> Parser<'a> {
 
     fn parse_anonymous_struct_type(&mut self) -> ParseResult<Type> {
         let open = self.expect(TokenKind::OpenBrace, "'{'")?;
-        let mut members = Vec::new();
+        let members = self.with_isolated_ternary_scope(|p| {
+            let mut members = Vec::new();
 
-        while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            if self.eat(TokenKind::Semicolon).is_some() {
-                continue;
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                if p.eat(TokenKind::Semicolon).is_some() {
+                    continue;
+                }
+
+                let member_start = p.current_span();
+                let is_readonly = p.eat(TokenKind::Readonly).is_some();
+                let name_tok = p.expect(TokenKind::Identifier, "member identifier")?;
+                let name = Ident::new(p.slice(name_tok.span), name_tok.span);
+                let is_optional = p.eat(TokenKind::Question).is_some();
+
+                let member =
+                    if !is_readonly && (p.at(TokenKind::LessThan) || p.at(TokenKind::OpenParen)) {
+                        let type_parameters = if p.at(TokenKind::LessThan) {
+                            Some(p.parse_type_parameters()?)
+                        } else {
+                            None
+                        };
+                        let params = p.with_grouping(|p| p.parse_parameter_list())?;
+                        p.expect(TokenKind::Colon, "':'")?;
+                        let return_type = p.parse_return_type()?;
+                        let member_span = p.span_from(member_start);
+                        AnonymousStructMember::Method(AnonymousStructMethod::new(
+                            name,
+                            is_optional,
+                            type_parameters,
+                            params,
+                            return_type,
+                            member_span,
+                        ))
+                    } else {
+                        p.expect(TokenKind::Colon, "':'")?;
+                        let ty = p.parse_type()?;
+                        let member_span = p.span_from(member_start);
+                        AnonymousStructMember::Field(AnonymousStructField::new(
+                            is_readonly,
+                            name,
+                            is_optional,
+                            ty,
+                            member_span,
+                        ))
+                    };
+
+                members.push(member);
+
+                if p.eat(TokenKind::Comma).is_none() {
+                    p.parse_eos()?;
+                }
             }
-
-            let member_start = self.current_span();
-            let is_readonly = self.eat(TokenKind::Readonly).is_some();
-            let name_tok = self.expect(TokenKind::Identifier, "member identifier")?;
-            let name = Ident::new(self.slice(name_tok.span), name_tok.span);
-            let is_optional = self.eat(TokenKind::Question).is_some();
-
-            let member = if !is_readonly
-                && (self.at(TokenKind::LessThan) || self.at(TokenKind::OpenParen))
-            {
-                let type_parameters = if self.at(TokenKind::LessThan) {
-                    Some(self.parse_type_parameters()?)
-                } else {
-                    None
-                };
-                let params = self.with_grouping(|p| p.parse_parameter_list())?;
-                self.expect(TokenKind::Colon, "':'")?;
-                let return_type = self.parse_return_type()?;
-                let member_span = self.span_from(member_start);
-                AnonymousStructMember::Method(AnonymousStructMethod::new(
-                    name,
-                    is_optional,
-                    type_parameters,
-                    params,
-                    return_type,
-                    member_span,
-                ))
-            } else {
-                self.expect(TokenKind::Colon, "':'")?;
-                let ty = self.parse_type()?;
-                let member_span = self.span_from(member_start);
-                AnonymousStructMember::Field(AnonymousStructField::new(
-                    is_readonly,
-                    name,
-                    is_optional,
-                    ty,
-                    member_span,
-                ))
-            };
-
-            members.push(member);
-
-            if self.eat(TokenKind::Comma).is_none() {
-                self.parse_eos()?;
-            }
-        }
+            Ok::<_, ParseError>(members)
+        })?;
 
         self.expect(TokenKind::CloseBrace, "'}'")?;
         let span = self.span_from(open.span);
@@ -418,14 +439,16 @@ impl<'a> Parser<'a> {
 
     fn parse_type_arguments_inner(&mut self) -> ParseResult<TypeArguments> {
         let open = self.expect(TokenKind::LessThan, "'<'")?;
-        let mut args = Vec::new();
-
-        loop {
-            args.push(self.parse_type()?);
-            if self.eat(TokenKind::Comma).is_none() || self.at_generic_gt_start() {
-                break;
+        let args = self.with_isolated_ternary_scope(|p| {
+            let mut args = Vec::new();
+            loop {
+                args.push(p.parse_type()?);
+                if p.eat(TokenKind::Comma).is_none() || p.at_generic_gt_start() {
+                    break;
+                }
             }
-        }
+            Ok::<_, ParseError>(args)
+        })?;
 
         self.expect_generic_gt("'>'")?;
         let span = self.span_from(open.span);
@@ -456,31 +479,33 @@ impl<'a> Parser<'a> {
     /// Parses a generic type parameter declaration list: `<T extends Bound = Default>`.
     pub fn parse_type_parameters(&mut self) -> ParseResult<TypeParameters> {
         let open = self.expect(TokenKind::LessThan, "'<'")?;
-        let mut params = Vec::new();
+        let params = self.with_isolated_ternary_scope(|p| {
+            let mut params = Vec::new();
+            loop {
+                let name_tok = p.expect(TokenKind::Identifier, "type parameter name")?;
+                let name = Ident::new(p.slice(name_tok.span), name_tok.span);
 
-        loop {
-            let name_tok = self.expect(TokenKind::Identifier, "type parameter name")?;
-            let name = Ident::new(self.slice(name_tok.span), name_tok.span);
+                let constraint = if p.eat(TokenKind::Extends).is_some() {
+                    Some(p.parse_type()?)
+                } else {
+                    None
+                };
 
-            let constraint = if self.eat(TokenKind::Extends).is_some() {
-                Some(self.parse_type()?)
-            } else {
-                None
-            };
+                let default = if p.eat(TokenKind::Assign).is_some() {
+                    Some(p.parse_type()?)
+                } else {
+                    None
+                };
 
-            let default = if self.eat(TokenKind::Assign).is_some() {
-                Some(self.parse_type()?)
-            } else {
-                None
-            };
+                let param_span = p.span_from(name_tok.span);
+                params.push(TypeParameter::new(name, constraint, default, param_span));
 
-            let param_span = self.span_from(name_tok.span);
-            params.push(TypeParameter::new(name, constraint, default, param_span));
-
-            if self.eat(TokenKind::Comma).is_none() || self.at_generic_gt_start() {
-                break;
+                if p.eat(TokenKind::Comma).is_none() || p.at_generic_gt_start() {
+                    break;
+                }
             }
-        }
+            Ok::<_, ParseError>(params)
+        })?;
 
         self.expect_generic_gt("'>'")?;
         let span = self.span_from(open.span);

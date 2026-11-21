@@ -2051,3 +2051,178 @@ fn test_parenthesized_expressions_disambiguated_from_arrow_params() {
     assert!(dt_errs.is_empty(), "unexpected errors: {:?}", dt_errs);
     assert!(matches!(dt_expr.kind, ExprKind::Ternary { .. }));
 }
+
+#[test]
+fn test_is_and_as_with_ternary_and_optional_types() {
+    // 1. Basic `is` and `as` before ternary `? :` must not steal `?` as `T?`.
+    let is_tern = parse_expr_ok(r#"x is int ? "int" : "other""#);
+    let ExprKind::Ternary { condition, .. } = is_tern.kind else {
+        panic!("expected Ternary");
+    };
+    assert!(matches!(
+        condition.kind,
+        ExprKind::TypeTest { ref ty, .. } if ty.kind == TypeKind::Predefined(PredefinedType::Int)
+    ));
+
+    let entity_tern = parse_expr_ok(r#"entity is Player ? entity.name : "NPC""#);
+    assert!(matches!(
+        entity_tern.kind,
+        ExprKind::Ternary { ref condition, .. } if matches!(condition.kind, ExprKind::TypeTest { .. })
+    ));
+
+    let as_tern = parse_expr_ok("v as bool ? 1 : 0");
+    let ExprKind::Ternary {
+        condition: as_cond, ..
+    } = as_tern.kind
+    else {
+        panic!("expected Ternary for `as`");
+    };
+    assert!(matches!(
+        as_cond.kind,
+        ExprKind::Cast { ref ty, .. } if ty.kind == TypeKind::Predefined(PredefinedType::Bool)
+    ));
+
+    // 2. Consecutive `? ?`: first is Optional (`int?`), second is ternary `?`.
+    let double_q = parse_expr_ok("x is int? ? 1 : 2");
+    let ExprKind::Ternary {
+        condition: dq_cond, ..
+    } = double_q.kind
+    else {
+        panic!("expected Ternary after `int?`");
+    };
+    assert!(matches!(
+        dq_cond.kind,
+        ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Optional(_))
+    ));
+
+    // 3. Trailing `?` after prefix pointer types and function return types.
+    let ptr_tern = parse_expr_ok("x is *int ? 1 : 0");
+    assert!(matches!(
+        ptr_tern.kind,
+        ExprKind::Ternary { ref condition, .. }
+            if matches!(condition.kind, ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Pointer { .. }))
+    ));
+
+    let fn_tern = parse_expr_ok("x is () => int ? 1 : 0");
+    assert!(matches!(
+        fn_tern.kind,
+        ExprKind::Ternary { ref condition, .. }
+            if matches!(condition.kind, ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Function(_)))
+    ));
+
+    // 4. Delimited inner `?` stays Optional while outer `?` starts ternary.
+    let generic_opt = parse_expr_ok("x is Box<int?> ? 1 : 0");
+    let ExprKind::Ternary {
+        condition: gen_cond,
+        ..
+    } = generic_opt.kind
+    else {
+        panic!("expected Ternary after Box<int?>");
+    };
+    let ExprKind::TypeTest { ty: box_ty, .. } = gen_cond.kind else {
+        panic!("expected TypeTest");
+    };
+    let TypeKind::Reference(box_ref) = box_ty.kind else {
+        panic!("expected TypeReference");
+    };
+    assert!(matches!(
+        box_ref.type_arguments.as_ref().unwrap().args[0].kind,
+        TypeKind::Optional(_)
+    ));
+
+    let paren_opt = parse_expr_ok("x is (int?) ? 1 : 0");
+    assert!(matches!(
+        paren_opt.kind,
+        ExprKind::Ternary { ref condition, .. }
+            if matches!(condition.kind, ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Parenthesized(_)))
+    ));
+
+    // 5. Disambiguation of `?` followed by `[` (`int?[]` vs `? [1, 2] : [3, 4]`).
+    let opt_arr_cast = parse_expr_ok("x as int?[]");
+    let ExprKind::Cast { ty: arr_ty, .. } = opt_arr_cast.kind else {
+        panic!("expected Cast");
+    };
+    assert!(matches!(
+        arr_ty.kind,
+        TypeKind::DynamicArray(ref inner) if matches!(inner.kind, TypeKind::Optional(_))
+    ));
+
+    let opt_arr_before_tern = parse_expr_ok("x as int?[] ? [1] : [2]");
+    assert!(matches!(
+        opt_arr_before_tern.kind,
+        ExprKind::Ternary { ref condition, .. }
+            if matches!(condition.kind, ExprKind::Cast { ref ty, .. } if matches!(ty.kind, TypeKind::DynamicArray(_)))
+    ));
+
+    let arr_branch_tern = parse_expr_ok("x is int ? [1, 2] : [3, 4]");
+    let ExprKind::Ternary {
+        condition: arr_cond,
+        then_expr,
+        else_expr,
+        ..
+    } = arr_branch_tern.kind
+    else {
+        panic!("expected Ternary with array branches");
+    };
+    assert!(matches!(arr_cond.kind, ExprKind::TypeTest { .. }));
+    assert!(matches!(then_expr.kind, ExprKind::Array(_)));
+    assert!(matches!(else_expr.kind, ExprKind::Array(_)));
+
+    // 6. Optional types preserved in non-ternary / outer-ternary / switch-guard contexts.
+    let eq_opt = parse_expr_ok("x is int? == true");
+    assert!(matches!(
+        eq_opt.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Eq,
+            ref left,
+            ..
+        } if matches!(left.kind, ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Optional(_)))
+    ));
+
+    let call_opt = parse_expr_ok("f(x is int?)");
+    assert!(matches!(call_opt.kind, ExprKind::Call { .. }));
+
+    let add_opt_in_outer = parse_expr_ok("flag ? x as int? + 1 : 0");
+    let ExprKind::Ternary {
+        then_expr: outer_then,
+        ..
+    } = add_opt_in_outer.kind
+    else {
+        panic!("expected outer Ternary");
+    };
+    assert!(matches!(
+        outer_then.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            ref left,
+            ..
+        } if matches!(left.kind, ExprKind::Cast { ref ty, .. } if matches!(ty.kind, TypeKind::Optional(_)))
+    ));
+
+    let nested_tern = parse_expr_ok("flag ? x is int ? 1 : 2 : 0");
+    let ExprKind::Ternary {
+        then_expr: inner_t, ..
+    } = nested_tern.kind
+    else {
+        panic!("expected outer Ternary");
+    };
+    assert!(matches!(inner_t.kind, ExprKind::Ternary { .. }));
+
+    let sw_guard = parse_stmt_ok("switch (v) { case n when n is int? + 1 : break; }");
+    assert!(matches!(sw_guard.kind, StmtKind::Switch { .. }));
+
+    // 7. Linear time on long chain of `x is int?` without colons.
+    let long_chain = (0..500)
+        .map(|_| "x is int?")
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let (long_expr, long_errs) = parse_expr(&long_chain);
+    assert!(long_errs.is_empty(), "unexpected errors: {:?}", long_errs);
+    assert!(matches!(
+        long_expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::LogicalAnd,
+            ..
+        }
+    ));
+}

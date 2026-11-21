@@ -350,4 +350,137 @@ impl<'a> TokenStream<'a> {
         }
         false
     }
+
+    /// Scans forward non-recursively from the current `?` token to check whether a matching `:`
+    /// exists for a ternary expression (accounting for `pending_ternary_then` outer open
+    /// ternaries and balanced `(...)` / `[...]` / `{...}` delimiters).
+    ///
+    /// When a scan reaches a boundary without encountering any depth-0 `:`, all depth-0 `?`
+    /// positions seen during that scan are recorded in `no_colon_cache` to keep chains linear.
+    pub(crate) fn has_ternary_colon_from_question(
+        &self,
+        pending_ternary_then: u32,
+        no_colon_cache: &mut HashSet<usize>,
+        can_start_expr: fn(TokenKind) -> bool,
+    ) -> bool {
+        if self.virtual_token.is_some() {
+            return false;
+        }
+        let q_idx = self.cursor;
+        if no_colon_cache.contains(&q_idx) {
+            return false;
+        }
+        if self.tokens.get(q_idx).map(|t| t.kind) != Some(TokenKind::Question) {
+            return false;
+        }
+
+        let mut paren_depth: u32 = 0;
+        let mut bracket_depth: u32 = 0;
+        let mut brace_depth: u32 = 0;
+        let mut balance: i32 = 1 + pending_ternary_then as i32;
+        let mut colons_seen: u32 = 0;
+        let mut depth0_questions: Vec<usize> = vec![q_idx];
+
+        let mut idx = q_idx + 1;
+        while idx < self.tokens.len() {
+            let tok = self.tokens[idx];
+            let at_depth0 = paren_depth == 0 && bracket_depth == 0 && brace_depth == 0;
+
+            if at_depth0 {
+                match tok.kind {
+                    TokenKind::Semicolon
+                    | TokenKind::Comma
+                    | TokenKind::CloseParen
+                    | TokenKind::CloseBracket
+                    | TokenKind::CloseBrace
+                    | TokenKind::Eof => break,
+                    _ if tok.has_leading_newline && is_ternary_scan_stop_keyword(tok.kind) => {
+                        break;
+                    }
+                    TokenKind::Question => {
+                        depth0_questions.push(idx);
+                        let next_kind = self
+                            .tokens
+                            .get(idx + 1)
+                            .map(|t| t.kind)
+                            .unwrap_or(TokenKind::Eof);
+                        if can_start_expr(next_kind) {
+                            balance += 1;
+                        }
+                    }
+                    TokenKind::Colon => {
+                        colons_seen += 1;
+                        balance -= 1;
+                        if balance <= 0 {
+                            return true;
+                        }
+                    }
+                    TokenKind::OpenParen => paren_depth += 1,
+                    TokenKind::OpenBracket => bracket_depth += 1,
+                    TokenKind::OpenBrace => brace_depth += 1,
+                    _ => {}
+                }
+            } else {
+                match tok.kind {
+                    TokenKind::OpenParen => paren_depth += 1,
+                    TokenKind::CloseParen => match paren_depth.checked_sub(1) {
+                        Some(d) => paren_depth = d,
+                        None => break,
+                    },
+                    TokenKind::OpenBracket => bracket_depth += 1,
+                    TokenKind::CloseBracket => match bracket_depth.checked_sub(1) {
+                        Some(d) => bracket_depth = d,
+                        None => break,
+                    },
+                    TokenKind::OpenBrace => brace_depth += 1,
+                    TokenKind::CloseBrace => match brace_depth.checked_sub(1) {
+                        Some(d) => brace_depth = d,
+                        None => break,
+                    },
+                    TokenKind::Eof => break,
+                    _ => {}
+                }
+            }
+
+            idx += 1;
+        }
+
+        if colons_seen == 0 {
+            for pos in depth0_questions {
+                no_colon_cache.insert(pos);
+            }
+        }
+        false
+    }
+}
+
+#[inline]
+fn is_ternary_scan_stop_keyword(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Let
+            | TokenKind::Const
+            | TokenKind::Function
+            | TokenKind::Struct
+            | TokenKind::Class
+            | TokenKind::Interface
+            | TokenKind::Enum
+            | TokenKind::Type
+            | TokenKind::Extern
+            | TokenKind::Import
+            | TokenKind::Export
+            | TokenKind::Return
+            | TokenKind::Break
+            | TokenKind::Continue
+            | TokenKind::If
+            | TokenKind::Else
+            | TokenKind::While
+            | TokenKind::Do
+            | TokenKind::For
+            | TokenKind::Defer
+            | TokenKind::Debugger
+            | TokenKind::Using
+            | TokenKind::Case
+            | TokenKind::Default
+    )
 }

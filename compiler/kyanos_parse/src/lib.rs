@@ -120,6 +120,8 @@ pub(crate) struct BacktrackMemo {
     pub(crate) failed_type_arguments: HashSet<(usize, bool)>,
     /// `(cursor, in_grouping)` keys where `try_parse_generic_postfix` did not form a generic call/init.
     pub(crate) failed_generic_postfix: HashSet<(usize, bool)>,
+    /// Token indices of `?` at depth 0 proven to have no matching `:` before the enclosing boundary.
+    pub(crate) no_colon_after_questions: HashSet<usize>,
 }
 
 /// Handcrafted fault-tolerant recursive-descent + Pratt parser for Kyanos.
@@ -139,6 +141,10 @@ pub struct Parser<'a> {
     pub(crate) eos_allows_else: bool,
     /// Allows `while` to terminate an immediately enclosed braceless `do` body.
     pub(crate) eos_allows_while: bool,
+    /// When `true` (on the RHS of `is`/`as`), trailing `?` yields to a ternary `? ... : ...`.
+    pub(crate) stop_optional_before_ternary: bool,
+    /// Number of enclosing unclosed ternary `then` branches / `switch` `when` guards expecting `:`.
+    pub(crate) pending_ternary_then: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -185,6 +191,8 @@ impl<'a> Parser<'a> {
             recursion_depth,
             eos_allows_else: false,
             eos_allows_while: false,
+            stop_optional_before_ternary: false,
+            pending_ternary_then: 0,
         }
     }
 
@@ -205,6 +213,8 @@ impl<'a> Parser<'a> {
             recursion_depth: 0,
             eos_allows_else: false,
             eos_allows_while: false,
+            stop_optional_before_ternary: false,
+            pending_ternary_then: 0,
         }
     }
 
@@ -401,15 +411,45 @@ impl<'a> Parser<'a> {
     }
 
     /// Executes `f` inside a delimited grouping (`(...)` or `[...]`), permitting
-    /// multi-line binary and postfix expression continuations.
+    /// multi-line binary and postfix expression continuations while isolating ternary state.
     #[inline]
     pub(crate) fn with_grouping<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
+        let prev_stop = std::mem::replace(&mut self.stop_optional_before_ternary, false);
+        let prev_pending = std::mem::replace(&mut self.pending_ternary_then, 0);
         self.grouping_depth += 1;
         let res = f(self);
         self.grouping_depth -= 1;
+        self.stop_optional_before_ternary = prev_stop;
+        self.pending_ternary_then = prev_pending;
+        res
+    }
+
+    /// Temporarily resets ternary disambiguation state while inside `{ ... }` or `< ... >` delimiters.
+    #[inline]
+    pub(crate) fn with_isolated_ternary_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        let prev_stop = std::mem::replace(&mut self.stop_optional_before_ternary, false);
+        let prev_pending = std::mem::replace(&mut self.pending_ternary_then, 0);
+        let res = f(self);
+        self.stop_optional_before_ternary = prev_stop;
+        self.pending_ternary_then = prev_pending;
+        res
+    }
+
+    /// Runs `f` with `stop_optional_before_ternary` set to `stop` (used for `is` / `as` RHS types).
+    #[inline]
+    pub(crate) fn with_stop_optional_before_ternary<F, T>(&mut self, stop: bool, f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        let prev = std::mem::replace(&mut self.stop_optional_before_ternary, stop);
+        let res = f(self);
+        self.stop_optional_before_ternary = prev;
         res
     }
 
