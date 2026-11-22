@@ -26,10 +26,6 @@ impl<'a> Parser<'a> {
 
     fn parse_block_inner(&mut self) -> ParseResult<Block> {
         let open = self.expect(TokenKind::OpenBrace, "'{'")?;
-        let prev_else = self.eos_allows_else;
-        let prev_while = self.eos_allows_while;
-        self.eos_allows_else = false;
-        self.eos_allows_while = false;
 
         let mut statements = Vec::new();
         self.with_isolated_ternary_scope(|p| {
@@ -39,8 +35,6 @@ impl<'a> Parser<'a> {
             }
         });
 
-        self.eos_allows_else = prev_else;
-        self.eos_allows_while = prev_while;
         self.expect(TokenKind::CloseBrace, "'}'")?;
         let span = self.span_from(open.span);
         Ok(Block::new(statements, span))
@@ -254,9 +248,10 @@ impl<'a> Parser<'a> {
 
     fn parse_do_while_stmt(&mut self) -> ParseResult<Stmt> {
         let do_tok = self.expect(TokenKind::Do, "'do'")?;
-        let prev_while = self.eos_allows_while;
-        self.eos_allows_while = true;
+        let prev_else = std::mem::replace(&mut self.eos_allows_else, false);
+        let prev_while = std::mem::replace(&mut self.eos_allows_while, true);
         let body_res = self.parse_stmt();
+        self.eos_allows_else = prev_else;
         self.eos_allows_while = prev_while;
         let body = body_res?;
 
@@ -359,15 +354,17 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::OpenBrace, "'{'")?;
 
         let mut cases = Vec::new();
-        while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            match self.parse_switch_case() {
-                Ok(arm) => cases.push(arm),
-                Err(err) => {
-                    self.report_error(err);
-                    self.synchronize_to_switch_arm();
+        self.with_isolated_ternary_scope(|p| {
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                match p.parse_switch_case() {
+                    Ok(arm) => cases.push(arm),
+                    Err(err) => {
+                        p.report_error(err);
+                        p.synchronize_to_switch_arm();
+                    }
                 }
             }
-        }
+        });
 
         self.expect(TokenKind::CloseBrace, "'}'")?;
         let span = self.span_from(switch_tok.span);
@@ -538,15 +535,6 @@ impl<'a> Parser<'a> {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-
-    #[inline]
-    fn at_eos_boundary(&self) -> bool {
-        let tok = self.current();
-        matches!(
-            tok.kind,
-            TokenKind::Semicolon | TokenKind::CloseBrace | TokenKind::Eof
-        ) || tok.has_leading_newline
-    }
 
     #[inline]
     fn parse_optional_same_line_ident(&mut self) -> Option<Ident> {

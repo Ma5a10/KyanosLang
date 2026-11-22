@@ -2297,3 +2297,75 @@ fn test_utf8_slice_safety_and_unicode_escape_validation() {
     let err_cstr = p_cstr.parse_literal_token(cstr_tok).unwrap_err();
     assert!(matches!(err_cstr.kind(), ParseErrorKind::InvalidLiteral(_)));
 }
+
+#[test]
+fn test_braceless_if_do_return_and_eos_flag_isolation() {
+    // 1. Bare `return` in single-statement `if ... else` / `do ... while` on the same line.
+    let if_ret = parse_stmt_ok("if (cond) return else return 1");
+    let StmtKind::If(if_node) = if_ret.kind else {
+        panic!("expected If");
+    };
+    assert!(matches!(
+        if_node.then_branch.kind,
+        StmtKind::Return(ref r) if r.value.is_none()
+    ));
+    let else_branch = if_node.else_branch.expect("expected else branch");
+    assert!(matches!(
+        else_branch.kind,
+        StmtKind::Return(ref r) if r.value.is_some()
+    ));
+
+    let do_ret = parse_stmt_ok("do return while (cond)");
+    let StmtKind::DoWhile(do_node) = do_ret.kind else {
+        panic!("expected DoWhile");
+    };
+    assert!(matches!(
+        do_node.body.kind,
+        StmtKind::Return(ref r) if r.value.is_none()
+    ));
+
+    let if_do_ret = parse_stmt_ok("if (cond) do return while (c) else work()");
+    assert!(matches!(if_do_ret.kind, StmtKind::If(_)));
+
+    // 2. `eos_allows_else` / `eos_allows_while` must not leak into `switch`, blocks, or struct types.
+    let mut leaked_switch_else = Parser::new("if (a) switch (x) { case 1: y = 1 else work() }");
+    let _ = leaked_switch_else.parse_stmt();
+    assert!(
+        leaked_switch_else.errors().iter().any(|e| matches!(
+            e.kind(),
+            ParseErrorKind::ExpectedEos {
+                found: TokenKind::Else
+            }
+        )),
+        "expected ExpectedEos(Else) inside switch arm, got: {:?}",
+        leaked_switch_else.errors()
+    );
+
+    let mut leaked_switch_while =
+        Parser::new("do switch (x) { case 1: y = 1 while (c) } while (d)");
+    let _ = leaked_switch_while.parse_stmt();
+    assert!(
+        leaked_switch_while.errors().iter().any(|e| matches!(
+            e.kind(),
+            ParseErrorKind::ExpectedEos {
+                found: TokenKind::While
+            }
+        )),
+        "expected ExpectedEos(While) inside switch arm, got: {:?}",
+        leaked_switch_while.errors()
+    );
+
+    let mut leaked_anon_struct = Parser::new("if (a) let x: { a: int else: int }");
+    let anon_err = leaked_anon_struct
+        .parse_stmt()
+        .expect_err("else inside anonymous struct type should fail EOS");
+    assert_eq!(
+        *anon_err.kind(),
+        ParseErrorKind::ExpectedEos {
+            found: TokenKind::Else
+        }
+    );
+
+    let mut bad_do_else = Parser::new("if (a) do return else while (c)");
+    assert!(bad_do_else.parse_stmt().is_err());
+}

@@ -411,23 +411,19 @@ impl<'a> Parser<'a> {
     }
 
     /// Executes `f` inside a delimited grouping (`(...)` or `[...]`), permitting
-    /// multi-line binary and postfix expression continuations while isolating ternary state.
+    /// multi-line binary and postfix expression continuations while isolating ternary/EOS state.
     #[inline]
     pub(crate) fn with_grouping<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
-        let prev_stop = std::mem::replace(&mut self.stop_optional_before_ternary, false);
-        let prev_pending = std::mem::replace(&mut self.pending_ternary_then, 0);
         self.grouping_depth += 1;
-        let res = f(self);
+        let res = self.with_isolated_ternary_scope(f);
         self.grouping_depth -= 1;
-        self.stop_optional_before_ternary = prev_stop;
-        self.pending_ternary_then = prev_pending;
         res
     }
 
-    /// Temporarily resets ternary disambiguation state while inside `{ ... }` or `< ... >` delimiters.
+    /// Temporarily resets ternary and single-statement EOS boundary flags inside delimited scopes.
     #[inline]
     pub(crate) fn with_isolated_ternary_scope<F, T>(&mut self, f: F) -> T
     where
@@ -435,9 +431,13 @@ impl<'a> Parser<'a> {
     {
         let prev_stop = std::mem::replace(&mut self.stop_optional_before_ternary, false);
         let prev_pending = std::mem::replace(&mut self.pending_ternary_then, 0);
+        let prev_else = std::mem::replace(&mut self.eos_allows_else, false);
+        let prev_while = std::mem::replace(&mut self.eos_allows_while, false);
         let res = f(self);
         self.stop_optional_before_ternary = prev_stop;
         self.pending_ternary_then = prev_pending;
+        self.eos_allows_else = prev_else;
+        self.eos_allows_while = prev_while;
         res
     }
 
@@ -476,6 +476,19 @@ impl<'a> Parser<'a> {
     // Swift-Style End-of-Statement (`eos`) & Error Recovery
     // -------------------------------------------------------------------------
 
+    /// Returns `true` if the current token marks a statement boundary (`;`, `}`, `EOF`,
+    /// a leading newline, or `else`/`while` closing an immediately enclosed braceless `if`/`do`).
+    #[inline]
+    pub(crate) fn at_eos_boundary(&self) -> bool {
+        let tok = self.current();
+        matches!(
+            tok.kind,
+            TokenKind::Semicolon | TokenKind::CloseBrace | TokenKind::Eof
+        ) || tok.has_leading_newline
+            || (self.eos_allows_else && tok.kind == TokenKind::Else)
+            || (self.eos_allows_while && tok.kind == TokenKind::While)
+    }
+
     /// Validates and consumes a Swift-style statement terminator (`eos`).
     ///
     /// Succeeds when:
@@ -488,15 +501,11 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        let tok = self.current();
-        if matches!(tok.kind, TokenKind::CloseBrace | TokenKind::Eof)
-            || tok.has_leading_newline
-            || (self.eos_allows_else && tok.kind == TokenKind::Else)
-            || (self.eos_allows_while && tok.kind == TokenKind::While)
-        {
+        if self.at_eos_boundary() {
             return Ok(());
         }
 
+        let tok = self.current();
         Err(ParseError::expected_eos(tok.kind, tok.span))
     }
 
