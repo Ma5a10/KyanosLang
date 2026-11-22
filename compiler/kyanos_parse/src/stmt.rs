@@ -356,11 +356,12 @@ impl<'a> Parser<'a> {
         let mut cases = Vec::new();
         self.with_isolated_ternary_scope(|p| {
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                let start_cursor = p.checkpoint().cursor;
                 match p.parse_switch_case() {
                     Ok(arm) => cases.push(arm),
                     Err(err) => {
                         p.report_error(err);
-                        p.synchronize_to_switch_arm();
+                        p.synchronize_to_switch_case_from(start_cursor);
                     }
                 }
             }
@@ -415,12 +416,13 @@ impl<'a> Parser<'a> {
             && !self.at(TokenKind::CloseBrace)
             && !self.is_eof()
         {
+            let start_cursor = self.checkpoint().cursor;
             match self.parse_stmt() {
                 Ok(stmt) => stmts.push(stmt),
                 Err(err) => {
                     let err_span = err.span();
                     self.report_error(err);
-                    self.synchronize_to_switch_arm();
+                    self.synchronize_to_switch_arm_stmt_from(start_cursor);
                     let id = self.alloc_id();
                     stmts.push(Stmt::error(err_span).with_id(id));
                 }
@@ -429,14 +431,52 @@ impl<'a> Parser<'a> {
         stmts
     }
 
-    fn synchronize_to_switch_arm(&mut self) {
-        if !self.is_eof()
+    fn advance_if_stuck_outside_switch_boundary(&mut self, start_cursor: usize) {
+        if self.checkpoint().cursor <= start_cursor
+            && !self.is_eof()
             && !self.at(TokenKind::CloseBrace)
             && !self.at(TokenKind::Case)
             && !self.at(TokenKind::Default)
         {
             self.bump();
         }
+    }
+
+    /// Synchronizes inside a `switch { ... }` body waiting for the next `case`, `default`,
+    /// or closing `}` at brace depth 0 without stopping on `;` or inner statement keywords.
+    fn synchronize_to_switch_case_from(&mut self, start_cursor: usize) {
+        if !self.at(TokenKind::OpenBrace) {
+            self.advance_if_stuck_outside_switch_boundary(start_cursor);
+        }
+        let mut brace_depth = 0usize;
+        while !self.is_eof() {
+            let tok = self.current();
+            match tok.kind {
+                TokenKind::OpenBrace => {
+                    brace_depth += 1;
+                    self.bump();
+                }
+                TokenKind::CloseBrace => {
+                    if brace_depth == 0 {
+                        return;
+                    }
+                    brace_depth -= 1;
+                    self.bump();
+                }
+                TokenKind::Case | TokenKind::Default if brace_depth == 0 => {
+                    return;
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
+    }
+
+    /// Synchronizes after a failed statement in a `switch` arm body, preserving newline-aligned
+    /// following statements when `parse_stmt` already consumed tokens before failing.
+    fn synchronize_to_switch_arm_stmt_from(&mut self, start_cursor: usize) {
+        self.advance_if_stuck_outside_switch_boundary(start_cursor);
         while !self.is_eof() {
             let tok = self.current();
             if tok.kind == TokenKind::Semicolon {

@@ -2531,3 +2531,94 @@ fn test_lexer_error_span_newline_preservation_and_total_cap() {
         p_capped.bump();
     }
 }
+
+#[test]
+fn test_switch_error_recovery_preserves_arms_and_statements() {
+    // 1. Partial statement consumption failing on next-line `let` inside a switch arm
+    //    must not eat the following valid `let ok = 1` statement.
+    let arm_recovery_src = r#"
+switch (x) {
+    case 1:
+        let broken =
+        let ok = 1
+    case 2:
+        return 2
+}
+"#;
+    let mut p1 = Parser::new(arm_recovery_src);
+    let sw1 = p1.parse_stmt().expect("switch should recover");
+    assert_eq!(p1.errors().len(), 1, "errors: {:?}", p1.errors());
+    let StmtKind::Switch(s1) = sw1.kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(s1.cases.len(), 2);
+    let SwitchCase::Case { body: body1, .. } = &s1.cases[0] else {
+        panic!("expected Case 1");
+    };
+    assert_eq!(body1.len(), 2);
+    assert_eq!(body1[0].kind, StmtKind::Error);
+    assert!(matches!(body1[1].kind, StmtKind::Variable(_)));
+
+    // 0-token consumption failure inside an arm also recovers cleanly without infinite loops.
+    let zero_progress_src = "switch (x) {\n case 1:\n )\n let ok = 1\n}";
+    let mut p_zero = Parser::new(zero_progress_src);
+    let sw_zero = p_zero.parse_stmt().expect("switch should recover");
+    assert_eq!(p_zero.errors().len(), 1);
+    let StmtKind::Switch(sz) = sw_zero.kind else {
+        panic!("expected Switch");
+    };
+    let SwitchCase::Case { body: bz, .. } = &sz.cases[0] else {
+        panic!("expected Case");
+    };
+    assert_eq!(bz.len(), 2);
+    assert_eq!(bz[0].kind, StmtKind::Error);
+    assert!(matches!(bz[1].kind, StmtKind::Variable(_)));
+
+    // 2. Stray statements outside `case`/`default` must produce a single error without
+    //    cascading at every `let`/`return` keyword.
+    let stray_src = r#"
+switch (x) {
+    let a = 1;
+    let b = 2
+    return a
+    foo { let inner = 1 }
+    case 1:
+        work()
+}
+"#;
+    let mut p2 = Parser::new(stray_src);
+    let sw2 = p2.parse_stmt().expect("switch should recover");
+    assert_eq!(
+        p2.errors().len(),
+        1,
+        "stray pre-case statements must not cascade: {:?}",
+        p2.errors()
+    );
+    let StmtKind::Switch(s2) = sw2.kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(s2.cases.len(), 1);
+
+    // Missing `:` after `case 1` recovers directly to `case 2:` without cascading on inner stmts.
+    let missing_colon_src = r#"
+switch (x) {
+    case 1
+        let a = 1
+        return a
+    case 2:
+        work()
+}
+"#;
+    let mut p3 = Parser::new(missing_colon_src);
+    let sw3 = p3.parse_stmt().expect("switch should recover");
+    assert_eq!(
+        p3.errors().len(),
+        1,
+        "missing colon should not cascade across statements: {:?}",
+        p3.errors()
+    );
+    let StmtKind::Switch(s3) = sw3.kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(s3.cases.len(), 1);
+}
