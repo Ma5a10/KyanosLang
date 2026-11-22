@@ -153,7 +153,8 @@ impl<'a> TokenStream<'a> {
         self.base_offset
     }
 
-    /// Returns the slice of source code covered by `span` (adjusted for `base_offset`).
+    /// Returns the slice of source code covered by `span` (adjusted for `base_offset`),
+    /// returning `""` safely if `span` is out of bounds or not on UTF-8 char boundaries.
     #[inline]
     pub fn slice(&self, span: Span) -> &'a str {
         let start = span.start.saturating_sub(self.base_offset);
@@ -161,11 +162,7 @@ impl<'a> TokenStream<'a> {
             .end
             .saturating_sub(self.base_offset)
             .min(self.source.len());
-        if start <= end {
-            &self.source[start..end]
-        } else {
-            ""
-        }
+        self.source.get(start..end).unwrap_or("")
     }
 
     /// Returns the current token without consuming it.

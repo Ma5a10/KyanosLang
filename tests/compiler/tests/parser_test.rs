@@ -2226,3 +2226,74 @@ fn test_is_and_as_with_ternary_and_optional_types() {
         }
     ));
 }
+
+#[test]
+fn test_utf8_slice_safety_and_unicode_escape_validation() {
+    use kyanos_lexer::Token;
+    use kyanos_parse::TokenStream;
+
+    // 1. `\uXXXX` with multibyte UTF-8 characters must return InvalidLiteral without panicking.
+    let mb_u4_src = r#""\uあい""#;
+    let mb_u4_tok = Token::new(
+        TokenKind::StringLiteral,
+        Span::new(0, mb_u4_src.len()),
+        false,
+    );
+    let mut p_u4 = Parser::from_stream(TokenStream::from_tokens(mb_u4_src, vec![mb_u4_tok]));
+    let err_u4 = p_u4.parse_literal_token(mb_u4_tok).unwrap_err();
+    assert!(matches!(err_u4.kind(), ParseErrorKind::InvalidLiteral(_)));
+
+    // `\u+123` (non-hexdigit '+' in 4-digit form) must also be rejected.
+    let plus_u4_src = r#""\u+123""#;
+    let plus_u4_tok = Token::new(
+        TokenKind::StringLiteral,
+        Span::new(0, plus_u4_src.len()),
+        false,
+    );
+    let mut p_plus4 = Parser::from_stream(TokenStream::from_tokens(plus_u4_src, vec![plus_u4_tok]));
+    assert!(matches!(
+        p_plus4.parse_literal_token(plus_u4_tok).unwrap_err().kind(),
+        ParseErrorKind::InvalidLiteral(_)
+    ));
+
+    // 2. `\u{...}` validation matches lexer rules (1..=6 ASCII hex digits, no '+' or >6 digits).
+    for bad_brace in [r#""\u{+41}""#, r#""\u{0000041}""#, r#""\u{}""#] {
+        let tok = Token::new(
+            TokenKind::StringLiteral,
+            Span::new(0, bad_brace.len()),
+            false,
+        );
+        let mut p = Parser::from_stream(TokenStream::from_tokens(bad_brace, vec![tok]));
+        let err = p.parse_literal_token(tok).unwrap_err();
+        assert!(
+            matches!(err.kind(), ParseErrorKind::InvalidLiteral(_)),
+            "expected InvalidLiteral for {bad_brace}"
+        );
+    }
+
+    // 3. `TokenStream::slice` and `strip_delimiters` must not panic on non-char-boundary Spans.
+    let utf8_src = "あいう";
+    let bad_stream = TokenStream::from_tokens(utf8_src, Vec::new());
+    assert_eq!(bad_stream.slice(Span::new(1, 5)), "");
+
+    let bad_char_src = r#""あ""#;
+    let bad_split_tok = Token::new(TokenKind::StringLiteral, Span::new(0, 3), false);
+    let mut p_strip =
+        Parser::from_stream(TokenStream::from_tokens(bad_char_src, vec![bad_split_tok]));
+    let err_strip = p_strip.parse_literal_token(bad_split_tok).unwrap_err();
+    assert!(matches!(
+        err_strip.kind(),
+        ParseErrorKind::InvalidLiteral(_)
+    ));
+
+    // 4. `CStringLiteral` defense-in-depth rejects interior NUL bytes from direct token inputs.
+    let cstr_nul_src = r#"c"hi\0there""#;
+    let cstr_tok = Token::new(
+        TokenKind::CStringLiteral,
+        Span::new(0, cstr_nul_src.len()),
+        false,
+    );
+    let mut p_cstr = Parser::from_stream(TokenStream::from_tokens(cstr_nul_src, vec![cstr_tok]));
+    let err_cstr = p_cstr.parse_literal_token(cstr_tok).unwrap_err();
+    assert!(matches!(err_cstr.kind(), ParseErrorKind::InvalidLiteral(_)));
+}

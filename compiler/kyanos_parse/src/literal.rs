@@ -28,6 +28,15 @@ impl<'a> Parser<'a> {
             TokenKind::CStringLiteral => {
                 let inner = strip_delimiters(raw, 2, 1, tok.span)?;
                 let value = unescape_string(inner, tok.span)?;
+                if value.contains('\0') {
+                    return Err(ParseError::new(
+                        ParseErrorKind::InvalidLiteral(
+                            "Null byte is not allowed inside C-string literal".to_string(),
+                        ),
+                        tok.span,
+                        "Null byte is not allowed inside C-string literal",
+                    ));
+                }
                 Ok(Literal::c_string(value, raw, tok.span))
             }
             TokenKind::CharLiteral => {
@@ -56,7 +65,7 @@ impl<'a> Parser<'a> {
         let mut idx = 0usize;
 
         while idx < inner.len() {
-            if inner[idx..].starts_with("${") {
+            if inner.get(idx..).is_some_and(|s| s.starts_with("${")) {
                 if !current_text.is_empty() {
                     parts.push(TemplateStringPart::String(std::mem::take(
                         &mut current_text,
@@ -76,7 +85,13 @@ impl<'a> Parser<'a> {
                         )
                     })?;
 
-                let expr_slice = &inner[expr_start..expr_end];
+                let Some(expr_slice) = inner.get(expr_start..expr_end) else {
+                    return Err(ParseError::new(
+                        ParseErrorKind::InvalidLiteral("Invalid interpolation span".to_string()),
+                        tok.span,
+                        "Invalid interpolation span in template literal",
+                    ));
+                };
                 let expr_abs_offset = inner_base_offset + expr_start;
                 let expr_span = Span::new(expr_abs_offset, inner_base_offset + expr_end);
 
@@ -115,7 +130,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            let ch = inner[idx..].chars().next().expect("idx < inner.len()");
+            let Some(ch) = inner.get(idx..).and_then(|s| s.chars().next()) else {
+                break;
+            };
             if ch == '\\' {
                 idx += 1;
                 let escaped = decode_escape_at(inner, &mut idx, tok.span)?;
@@ -185,22 +202,27 @@ fn decode_float_literal(raw: &str, span: Span) -> ParseResult<Literal> {
 
 /// Strips prefix/suffix delimiter bytes from a raw literal slice.
 fn strip_delimiters(raw: &str, prefix: usize, suffix: usize, span: Span) -> ParseResult<&str> {
-    if raw.len() < prefix + suffix {
+    let Some(end) = raw.len().checked_sub(suffix) else {
         return Err(ParseError::new(
             ParseErrorKind::InvalidLiteral("Malformed literal delimiters".to_string()),
             span,
             format!("Malformed literal '{}'", raw),
         ));
-    }
-    Ok(&raw[prefix..raw.len() - suffix])
+    };
+    raw.get(prefix..end).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorKind::InvalidLiteral("Malformed literal delimiters".to_string()),
+            span,
+            format!("Malformed literal '{}'", raw),
+        )
+    })
 }
 
 /// Unescapes the body of a string or C-string literal.
 fn unescape_string(inner: &str, span: Span) -> ParseResult<String> {
     let mut out = String::with_capacity(inner.len());
     let mut idx = 0usize;
-    while idx < inner.len() {
-        let ch = inner[idx..].chars().next().expect("idx < inner.len()");
+    while let Some(ch) = inner.get(idx..).and_then(|s| s.chars().next()) {
         if ch == '\\' {
             idx += 1;
             out.push(decode_escape_at(inner, &mut idx, span)?);
@@ -243,13 +265,16 @@ fn decode_single_char(inner: &str, span: Span) -> ParseResult<char> {
 
 /// Decodes an escape sequence starting immediately after `\` at `inner[*idx..]`.
 fn decode_escape_at(inner: &str, idx: &mut usize, span: Span) -> ParseResult<char> {
-    let esc = inner[*idx..].chars().next().ok_or_else(|| {
-        ParseError::new(
-            ParseErrorKind::InvalidLiteral("Incomplete escape sequence".to_string()),
-            span,
-            "Unexpected end of literal in escape sequence",
-        )
-    })?;
+    let esc = inner
+        .get(*idx..)
+        .and_then(|s| s.chars().next())
+        .ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::InvalidLiteral("Incomplete escape sequence".to_string()),
+                span,
+                "Unexpected end of literal in escape sequence",
+            )
+        })?;
     *idx += esc.len_utf8();
 
     match esc {
@@ -277,17 +302,41 @@ fn decode_escape_at(inner: &str, idx: &mut usize, span: Span) -> ParseResult<cha
 
 /// Decodes `\uXXXX` or `\u{HexDigit+}` starting after `\u`.
 fn decode_unicode_escape(inner: &str, idx: &mut usize, span: Span) -> ParseResult<char> {
-    let value = if inner[*idx..].starts_with('{') {
+    let rest = inner.get(*idx..).ok_or_else(|| {
+        ParseError::new(
+            ParseErrorKind::InvalidLiteral("Truncated unicode escape".to_string()),
+            span,
+            "Unexpected end of literal in unicode escape",
+        )
+    })?;
+
+    let value = if let Some(after_brace) = rest.strip_prefix('{') {
         *idx += 1;
-        let close_rel = inner[*idx..].find('}').ok_or_else(|| {
+        let close_rel = after_brace.find('}').ok_or_else(|| {
             ParseError::new(
                 ParseErrorKind::InvalidLiteral("Unterminated unicode escape".to_string()),
                 span,
                 "Unterminated '\\u{...}' escape sequence",
             )
         })?;
-        let hex = &inner[*idx..*idx + close_rel];
+        let hex = after_brace.get(..close_rel).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::InvalidLiteral("Invalid unicode escape".to_string()),
+                span,
+                "Invalid '\\u{...}' escape sequence",
+            )
+        })?;
         *idx += close_rel + 1;
+        if !(1..=6).contains(&hex.len()) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ParseError::new(
+                ParseErrorKind::InvalidLiteral(format!("Invalid unicode escape '\\u{{{}}}'", hex)),
+                span,
+                format!(
+                    "Unicode escape '\\u{{{}}}' must contain 1 to 6 hex digits",
+                    hex
+                ),
+            ));
+        }
         u32::from_str_radix(hex, 16).map_err(|err| {
             ParseError::new(
                 ParseErrorKind::InvalidLiteral(err.to_string()),
@@ -296,15 +345,28 @@ fn decode_unicode_escape(inner: &str, idx: &mut usize, span: Span) -> ParseResul
             )
         })?
     } else {
-        if inner.len() - *idx < 4 {
-            return Err(ParseError::new(
+        let end = idx.checked_add(4).ok_or_else(|| {
+            ParseError::new(
                 ParseErrorKind::InvalidLiteral("Truncated unicode escape".to_string()),
                 span,
                 "Expected 4 hex digits after '\\u'",
+            )
+        })?;
+        let hex = inner.get(*idx..end).ok_or_else(|| {
+            ParseError::new(
+                ParseErrorKind::InvalidLiteral("Truncated unicode escape".to_string()),
+                span,
+                "Expected 4 hex digits after '\\u'",
+            )
+        })?;
+        *idx = end;
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ParseError::new(
+                ParseErrorKind::InvalidLiteral(format!("Invalid unicode escape '\\u{}'", hex)),
+                span,
+                format!("Invalid 4-digit unicode escape '\\u{}'", hex),
             ));
         }
-        let hex = &inner[*idx..*idx + 4];
-        *idx += 4;
         u32::from_str_radix(hex, 16).map_err(|err| {
             ParseError::new(
                 ParseErrorKind::InvalidLiteral(err.to_string()),
