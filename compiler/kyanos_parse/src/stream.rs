@@ -16,6 +16,10 @@ use crate::error::ParseError;
 /// Safety cap on consecutive lexer errors to guarantee termination on malformed input.
 const MAX_CONSECUTIVE_LEXER_ERRORS: usize = 1024;
 
+/// Safety cap on total lexer errors collected for a single token stream (prevents unbounded
+/// diagnostic growth on alternating error/valid inputs such as `@a@a@a...`).
+pub const MAX_TOTAL_LEXER_ERRORS: usize = 4096;
+
 /// Saved cursor state enabling speculative lookahead and backtracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Checkpoint {
@@ -52,14 +56,12 @@ impl<'a> TokenStream<'a> {
         let mut lexer = Lexer::new(source);
         let mut tokens = Vec::new();
         let mut lex_errors = Vec::new();
-        let mut last_end = 0usize;
         let mut consecutive_errors = 0usize;
 
         loop {
-            match lexer.next_token() {
+            match lexer.next_token_with_span() {
                 Ok(mut tok) => {
                     consecutive_errors = 0;
-                    last_end = tok.span.end;
                     let is_eof = tok.kind == TokenKind::Eof;
                     if !tok.kind.is_trivia() {
                         tok.span =
@@ -70,11 +72,14 @@ impl<'a> TokenStream<'a> {
                         break;
                     }
                 }
-                Err(msg) => {
-                    let err_pos = last_end + base_offset;
-                    lex_errors.push(ParseError::lexer(msg, Span::new(err_pos, err_pos)));
+                Err((msg, err_span)) => {
+                    let shifted =
+                        Span::new(err_span.start + base_offset, err_span.end + base_offset);
+                    lex_errors.push(ParseError::lexer(msg, shifted));
                     consecutive_errors += 1;
-                    if consecutive_errors >= MAX_CONSECUTIVE_LEXER_ERRORS {
+                    if consecutive_errors >= MAX_CONSECUTIVE_LEXER_ERRORS
+                        || lex_errors.len() >= MAX_TOTAL_LEXER_ERRORS
+                    {
                         break;
                     }
                 }

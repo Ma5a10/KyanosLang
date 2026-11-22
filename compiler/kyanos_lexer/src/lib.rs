@@ -198,8 +198,9 @@ impl<'a> Lexer<'a> {
         had_newline
     }
 
-    // next_token returns the next token kind.
-    pub fn next_token(&mut self) -> Result<Token, String> {
+    /// Scans the next token, returning `Err((message, span))` with the exact offending span
+    /// while preserving any leading newline state for subsequent tokens.
+    pub fn next_token_with_span(&mut self) -> Result<Token, (String, Span)> {
         // Skip whitespace and line terminators, and combine with any newline carried across trivia.
         let had_newline = self.skip_whitespace_and_newlines() || self.pending_newline;
 
@@ -222,8 +223,17 @@ impl<'a> Lexer<'a> {
         // Preserve leading newline across comments, or reset for normal tokens.
         self.pending_newline = false;
 
-        // scan token kind (internal self.cursor moves)
-        let kind = self.scan_token_kind(first)?;
+        // Scan token kind (internal self.cursor moves).
+        let kind = match self.scan_token_kind(first) {
+            Ok(kind) => kind,
+            Err(msg) => {
+                // Keep any leading newline before/inside the invalid token so the next token
+                // preserves its Swift-style line-break boundary.
+                self.pending_newline |= had_newline;
+                let end = self.cursor;
+                return Err((msg, Span::new(start, end)));
+            }
+        };
 
         if kind.is_trivia() {
             // Keep leading newline flag (plus any newline found inside a multi-line comment)
@@ -235,6 +245,11 @@ impl<'a> Lexer<'a> {
         let end = self.cursor;
 
         Ok(Token::new(kind, Span::new(start, end), had_newline))
+    }
+
+    // next_token returns the next token or an error message.
+    pub fn next_token(&mut self) -> Result<Token, String> {
+        self.next_token_with_span().map_err(|(msg, _)| msg)
     }
 
     /// scan token kind
@@ -635,6 +650,7 @@ impl<'a> Lexer<'a> {
                     ch as u32
                 ));
             } else if Self::is_line_terminator(ch) {
+                self.pending_newline = true;
                 return Err("Unterminated string literal: newline in string".to_string());
             }
         }
@@ -655,6 +671,7 @@ impl<'a> Lexer<'a> {
                 ));
             }
             Some(ch) if Self::is_line_terminator(ch) => {
+                self.pending_newline = true;
                 return Err(
                     "Unterminated character literal: newline in character literal".to_string(),
                 );
@@ -910,6 +927,7 @@ impl<'a> Lexer<'a> {
                     return Err("Unterminated template interpolation: unclosed '${'".to_string());
                 }
             } else if Self::is_line_terminator(ch) {
+                self.pending_newline = true;
                 return Err(
                     "Unterminated template string literal: newline in template literal".to_string(),
                 );

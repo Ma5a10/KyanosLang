@@ -2488,3 +2488,46 @@ fn test_optional_chain_rejected_as_assignment_and_update_target() {
         let _ = parse_expr_ok(valid_src);
     }
 }
+
+#[test]
+fn test_lexer_error_span_newline_preservation_and_total_cap() {
+    use kyanos_parse::stream::MAX_TOTAL_LEXER_ERRORS;
+
+    // 1. Invalid token after comments/newlines reports exact Span (with base_offset) and
+    //    preserves `has_leading_newline` on the following statement so no ExpectedEos cascades.
+    let src = "let a = 1\n// skip this comment\n  @ let b = 2";
+    let at_offset = src.find('@').expect("'@' present");
+    let (stream, errs) = kyanos_parse::TokenStream::with_offset(src, 100);
+    assert_eq!(errs.len(), 1);
+    assert!(matches!(errs[0].kind(), ParseErrorKind::LexerError(_)));
+    assert_eq!(
+        errs[0].span(),
+        Span::new(100 + at_offset, 100 + at_offset + 1)
+    );
+    let mut parser_from_stream = Parser::from_stream(stream);
+    let _ = parser_from_stream.parse_program();
+    assert!(
+        parser_from_stream.errors().is_empty(),
+        "no cascading ExpectedEos expected after newline-preserved lexer error: {:?}",
+        parser_from_stream.errors()
+    );
+
+    // Also verify end-to-end `parse()` has only the single LexerError.
+    let out = parse("let a = 1\n@ let b = 2");
+    assert_eq!(out.errors.len(), 1);
+    assert!(matches!(
+        out.errors[0].kind(),
+        ParseErrorKind::LexerError(_)
+    ));
+    assert_eq!(out.program.elements.len(), 2);
+
+    // 2. Alternating invalid/valid tokens (`@a@a...`) terminate at MAX_TOTAL_LEXER_ERRORS.
+    let alternating = "@a".repeat(MAX_TOTAL_LEXER_ERRORS + 500);
+    let (capped_stream, capped_errs) = kyanos_parse::TokenStream::new(&alternating);
+    assert_eq!(capped_errs.len(), MAX_TOTAL_LEXER_ERRORS);
+    // Stream must still terminate cleanly at EOF.
+    let mut p_capped = Parser::from_stream(capped_stream);
+    while !p_capped.is_eof() {
+        p_capped.bump();
+    }
+}

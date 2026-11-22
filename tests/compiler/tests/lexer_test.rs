@@ -122,7 +122,8 @@ fn test_next_token_identifier() {
 #[test]
 fn test_keywords() {
     // Declarations & Definitions
-    let decls = tokenize("let const function class struct interface enum type constructor").unwrap();
+    let decls =
+        tokenize("let const function class struct interface enum type constructor").unwrap();
     assert_eq!(
         decls,
         vec![
@@ -1214,4 +1215,48 @@ fn test_trojan_source_bidi_control_rejected() {
 
     // Escaped BiDi control character in string literal is explicit and allowed
     assert!(Lexer::new(r#""\u202E""#).next_token().is_ok());
+}
+
+#[test]
+fn test_next_token_with_span_preserves_error_span_and_leading_newline() {
+    // 1. Offending token after comments/newlines carries its exact span, not previous token's end.
+    let src = "let a = 1\n// comment line\n   @ let b = 2";
+    let mut lexer = Lexer::new(src);
+    assert_eq!(lexer.next_token_with_span().unwrap().kind, TokenKind::Let);
+    assert_eq!(
+        lexer.next_token_with_span().unwrap().kind,
+        TokenKind::Identifier
+    );
+    assert_eq!(
+        lexer.next_token_with_span().unwrap().kind,
+        TokenKind::Assign
+    );
+    assert_eq!(
+        lexer.next_token_with_span().unwrap().kind,
+        TokenKind::IntegerLiteral
+    );
+    assert_eq!(
+        lexer.next_token_with_span().unwrap().kind,
+        TokenKind::SingleLineComment
+    );
+
+    let (msg, err_span) = lexer.next_token_with_span().unwrap_err();
+    assert!(msg.contains('@'));
+    assert_eq!(lexer.slice(err_span), "@");
+
+    let let_b = lexer.next_token_with_span().unwrap();
+    assert_eq!(let_b.kind, TokenKind::Let);
+    assert!(
+        let_b.has_leading_newline,
+        "token after newline + invalid token must keep has_leading_newline"
+    );
+
+    // 2. Unterminated string hitting a newline preserves `has_leading_newline` for the next line.
+    let unterminated = "\"abc\nlet c = 3";
+    let mut lex2 = Lexer::new(unterminated);
+    let (_, str_err_span) = lex2.next_token_with_span().unwrap_err();
+    assert_eq!(str_err_span.start, 0);
+    let let_c = lex2.next_token_with_span().unwrap();
+    assert_eq!(let_c.kind, TokenKind::Let);
+    assert!(let_c.has_leading_newline);
 }
