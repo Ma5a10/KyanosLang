@@ -84,6 +84,9 @@ impl<'a> Parser<'a> {
             if l_bp < min_bp {
                 return Ok(false);
             }
+            if matches!(post_op, PostfixUnaryOp::PostInc | PostfixUnaryOp::PostDec) {
+                self.report_if_invalid_assignment_target(lhs, "postfix update expression");
+            }
             self.bump();
             let prev = std::mem::replace(lhs, Expr::error(Span::DUMMY));
             let span = self.span_from(prev.span);
@@ -343,6 +346,9 @@ impl<'a> Parser<'a> {
 
         for (op, op_span) in ops.into_iter().rev() {
             self.exit_recursion();
+            if matches!(op, PrefixUnaryOp::PreInc | PrefixUnaryOp::PreDec) {
+                self.report_if_invalid_assignment_target(&target, "prefix update expression");
+            }
             let span = op_span.merge(target.span);
             let id = self.alloc_id();
             target = Expr::unary_prefix(op, target, span).with_id(id);
@@ -431,17 +437,22 @@ impl<'a> Parser<'a> {
         lhs: Expr,
         r_bp: u8,
     ) -> ParseResult<Expr> {
-        if !is_valid_assignment_target(&lhs) {
-            self.report_error(ParseError::new(
-                ParseErrorKind::InvalidAssignmentTarget,
-                lhs.span,
-                "Invalid left-hand side in assignment expression",
-            ));
-        }
+        self.report_if_invalid_assignment_target(&lhs, "assignment expression");
         self.bump();
         let rhs = self.parse_expr_bp(r_bp)?;
         let id = self.alloc_id();
         Ok(Expr::assign(assign_op, lhs, rhs).with_id(id))
+    }
+
+    #[inline]
+    fn report_if_invalid_assignment_target(&mut self, expr: &Expr, context: &str) {
+        if !is_valid_assignment_target(expr) {
+            self.report_error(ParseError::new(
+                ParseErrorKind::InvalidAssignmentTarget,
+                expr.span,
+                format!("Invalid left-hand side in {context}"),
+            ));
+        }
     }
 
     fn parse_member_property(&mut self) -> ParseResult<MemberProperty> {
@@ -1240,12 +1251,40 @@ fn is_newline_statement_boundary(kind: TokenKind) -> bool {
     )
 }
 
-/// Checks whether `expr` is syntactically valid as an assignment left-hand side.
+/// Returns `true` if `expr` evaluates through an optional-chaining step (`?.` / `?.[...]`)
+/// without an intervening non-null `!` unwrap.
+fn contains_optional_chain(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Member {
+            target,
+            is_optional,
+            ..
+        }
+        | ExprKind::Index {
+            target,
+            is_optional,
+            ..
+        } => *is_optional || contains_optional_chain(target),
+        ExprKind::Call { callee, .. } => contains_optional_chain(callee),
+        ExprKind::Parenthesized(inner) => contains_optional_chain(inner),
+        _ => false,
+    }
+}
+
+/// Checks whether `expr` is syntactically valid as an assignment or update (`++`/`--`) target.
 fn is_valid_assignment_target(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Ident(_) | ExprKind::Member { .. } | ExprKind::Index { .. } | ExprKind::Error => {
-            true
+        ExprKind::Ident(_) | ExprKind::Error => true,
+        ExprKind::Member {
+            target,
+            is_optional: false,
+            ..
         }
+        | ExprKind::Index {
+            target,
+            is_optional: false,
+            ..
+        } => !contains_optional_chain(target),
         ExprKind::UnaryPrefix {
             op: PrefixUnaryOp::Deref,
             ..

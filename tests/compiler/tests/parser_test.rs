@@ -2440,3 +2440,51 @@ class AccessorDemo {
         ClassMember::Method(m) if matches!(&m.name, ClassElementName::Ident(id) if id.as_str() == "get")
     ));
 }
+
+#[test]
+fn test_optional_chain_rejected_as_assignment_and_update_target() {
+    // 1. Direct and nested optional chains must be rejected for `=`, `+=`, `++`, and `--`.
+    for invalid_src in [
+        "obj?.prop = 1",
+        "obj?.prop += 1",
+        "arr?.[0] = 1",
+        "obj?.a.b = 1",
+        "arr?.[0].prop = 1",
+        "(obj?.a)[0] = 1",
+        "obj?.get().x = 1",
+        "obj?.prop++",
+        "++obj?.prop",
+        "arr?.[0]--",
+        "--arr?.[0]",
+        "1++",
+        "++1",
+        "(a + b)++",
+    ] {
+        let mut parser = Parser::new(invalid_src);
+        let _ = parser
+            .parse_expr()
+            .expect("invalid target recovers with diagnostic");
+        assert!(
+            parser
+                .errors()
+                .iter()
+                .any(|e| *e.kind() == ParseErrorKind::InvalidAssignmentTarget),
+            "expected InvalidAssignmentTarget for `{invalid_src}`, got: {:?}",
+            parser.errors()
+        );
+    }
+
+    // 2. Non-optional targets, `!`-unwrapped optional results, and optional call arguments stay valid.
+    for valid_src in [
+        "obj.prop = 1",
+        "arr[0] += 1",
+        "(obj?.a)!.b = 1",
+        "foo(obj?.a).b = 1",
+        "++obj.prop",
+        "arr[0]--",
+        "(*p)++",
+        "++(*p)",
+    ] {
+        let _ = parse_expr_ok(valid_src);
+    }
+}
