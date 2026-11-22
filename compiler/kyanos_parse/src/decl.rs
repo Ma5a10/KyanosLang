@@ -639,10 +639,12 @@ impl<'a> Parser<'a> {
             return self.finish_class_method(start, accessibility, is_static, true, name);
         }
 
-        // Contextual `get` / `set` accessor when followed by an identifier or `#private`.
+        // Contextual `get` / `set` accessor when followed on the same line by an identifier or `#private`.
+        let next = self.peek(1);
         if (self.at_ident_str("get") || self.at_ident_str("set"))
+            && !next.has_leading_newline
             && matches!(
-                self.peek_kind(1),
+                next.kind,
                 TokenKind::Identifier | TokenKind::PrivateIdentifier
             )
         {

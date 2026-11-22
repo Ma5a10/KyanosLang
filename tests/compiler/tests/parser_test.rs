@@ -2369,3 +2369,74 @@ fn test_braceless_if_do_return_and_eos_flag_isolation() {
     let mut bad_do_else = Parser::new("if (a) do return else while (c)");
     assert!(bad_do_else.parse_stmt().is_err());
 }
+
+#[test]
+fn test_contextual_get_set_respects_newlines() {
+    let out = parse_program_ok(
+        r#"
+class AccessorDemo {
+    get
+    value: int
+    public set
+    #other: string
+    static get /* multi-line
+                  comment */
+    flag: bool
+    get prop(): int { return 1 }
+    set #other(v: string) {}
+    get(): int { return 2 }
+}
+"#,
+    );
+
+    assert_eq!(out.program.elements.len(), 1);
+    let SourceElement::Decl(cls_decl) = &out.program.elements[0] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Class(cls) = &cls_decl.kind else {
+        panic!("expected Class");
+    };
+    assert_eq!(cls.members.len(), 9);
+
+    assert!(matches!(
+        &cls.members[0],
+        ClassMember::Field(f) if matches!(&f.name, ClassElementName::Ident(id) if id.as_str() == "get")
+            && f.ty.is_none()
+            && f.init.is_none()
+    ));
+    assert!(matches!(
+        &cls.members[1],
+        ClassMember::Field(f) if matches!(&f.name, ClassElementName::Ident(id) if id.as_str() == "value")
+    ));
+    assert!(matches!(
+        &cls.members[2],
+        ClassMember::Field(f) if matches!(&f.name, ClassElementName::Ident(id) if id.as_str() == "set")
+    ));
+    assert!(matches!(
+        &cls.members[3],
+        ClassMember::Field(f) if matches!(&f.name, ClassElementName::Private(p) if p.as_str() == "#other")
+    ));
+    assert!(matches!(
+        &cls.members[4],
+        ClassMember::Field(f) if f.is_static
+            && matches!(&f.name, ClassElementName::Ident(id) if id.as_str() == "get")
+    ));
+    assert!(matches!(
+        &cls.members[5],
+        ClassMember::Field(f) if matches!(&f.name, ClassElementName::Ident(id) if id.as_str() == "flag")
+    ));
+    assert!(matches!(
+        &cls.members[6],
+        ClassMember::GetterSetter(gs) if gs.kind == AccessorKind::Get
+            && matches!(&gs.name, ClassElementName::Ident(id) if id.as_str() == "prop")
+    ));
+    assert!(matches!(
+        &cls.members[7],
+        ClassMember::GetterSetter(gs) if gs.kind == AccessorKind::Set
+            && matches!(&gs.name, ClassElementName::Private(p) if p.as_str() == "#other")
+    ));
+    assert!(matches!(
+        &cls.members[8],
+        ClassMember::Method(m) if matches!(&m.name, ClassElementName::Ident(id) if id.as_str() == "get")
+    ));
+}
