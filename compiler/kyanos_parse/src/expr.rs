@@ -251,7 +251,7 @@ impl<'a> Parser<'a> {
                 let id = self.alloc_id();
                 Ok(Expr::literal(lit).with_id(id))
             }
-            TokenKind::TemplateStringLiteral => {
+            TokenKind::TemplateNoSubstitution | TokenKind::TemplateHead => {
                 self.bump();
                 self.parse_template_string_expr(tok)
             }
@@ -1205,7 +1205,8 @@ pub(crate) fn can_start_expr_kind(kind: TokenKind) -> bool {
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::Null
-                | TokenKind::TemplateStringLiteral
+                | TokenKind::TemplateNoSubstitution
+                | TokenKind::TemplateHead
                 | TokenKind::This
                 | TokenKind::Super
                 | TokenKind::Identifier

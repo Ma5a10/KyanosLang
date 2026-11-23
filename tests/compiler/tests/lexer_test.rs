@@ -858,26 +858,53 @@ fn test_template_string_literals() {
     assert_eq!(
         tokens,
         vec![
-            TokenKind::TemplateStringLiteral,
-            TokenKind::TemplateStringLiteral,
-            TokenKind::TemplateStringLiteral,
+            TokenKind::TemplateNoSubstitution,
+            TokenKind::TemplateNoSubstitution,
+            TokenKind::TemplateNoSubstitution,
         ]
     );
 
     // Template with interpolation
     let interpolated = tokenize(r#"`count: ${count}, user: ${user.name}`"#).unwrap();
-    assert_eq!(interpolated, vec![TokenKind::TemplateStringLiteral]);
+    assert_eq!(
+        interpolated,
+        vec![
+            TokenKind::TemplateHead,
+            TokenKind::Identifier,
+            TokenKind::TemplateMiddle,
+            TokenKind::Identifier,
+            TokenKind::Dot,
+            TokenKind::Identifier,
+            TokenKind::TemplateTail,
+        ]
+    );
 
     // Template with nested braces and strings inside expression
     let nested = tokenize(r#"`result: ${format("{item}", { id: 1 })}`"#).unwrap();
-    assert_eq!(nested, vec![TokenKind::TemplateStringLiteral]);
+    assert_eq!(
+        nested,
+        vec![
+            TokenKind::TemplateHead,
+            TokenKind::Identifier,
+            TokenKind::OpenParen,
+            TokenKind::StringLiteral,
+            TokenKind::Comma,
+            TokenKind::OpenBrace,
+            TokenKind::Identifier,
+            TokenKind::Colon,
+            TokenKind::IntegerLiteral,
+            TokenKind::CloseBrace,
+            TokenKind::CloseParen,
+            TokenKind::TemplateTail,
+        ]
+    );
 
     // Negative tests
     let mut unclosed = Lexer::new("`unclosed template");
     assert!(unclosed.next_token().is_err());
 
-    let mut unclosed_interp = Lexer::new("`hello ${world`");
-    assert!(unclosed_interp.next_token().is_err());
+    assert!(tokenize("`hello ${world`").is_err());
+    assert!(tokenize("`hello ${world").is_err());
 
     let mut newline_in_template = Lexer::new("`line1\nline2`");
     assert!(newline_in_template.next_token().is_err());
@@ -1137,19 +1164,46 @@ fn test_numeric_underscore_and_ident_suffix_errors() {
 fn test_template_string_nested_and_comments() {
     // Nested template literal inside interpolation
     let nested_tpl = tokenize(r#"`outer ${`inner ${1 + 2}`}`"#).unwrap();
-    assert_eq!(nested_tpl, vec![TokenKind::TemplateStringLiteral]);
+    assert_eq!(
+        nested_tpl,
+        vec![
+            TokenKind::TemplateHead,
+            TokenKind::TemplateHead,
+            TokenKind::IntegerLiteral,
+            TokenKind::Plus,
+            TokenKind::IntegerLiteral,
+            TokenKind::TemplateTail,
+            TokenKind::TemplateTail,
+        ]
+    );
 
     // Multi-line comment containing '}' inside interpolation
     let comment_brace = tokenize(r#"`val: ${ /* } */ 42 }`"#).unwrap();
-    assert_eq!(comment_brace, vec![TokenKind::TemplateStringLiteral]);
+    assert_eq!(
+        comment_brace,
+        vec![
+            TokenKind::TemplateHead,
+            TokenKind::MultiLineComment,
+            TokenKind::IntegerLiteral,
+            TokenKind::TemplateTail,
+        ]
+    );
 
     // Single-line comment containing '}' and multi-line expression inside interpolation
     let line_comment_brace = tokenize("`val: ${ // }\n 42 }`").unwrap();
-    assert_eq!(line_comment_brace, vec![TokenKind::TemplateStringLiteral]);
+    assert_eq!(
+        line_comment_brace,
+        vec![
+            TokenKind::TemplateHead,
+            TokenKind::SingleLineComment,
+            TokenKind::IntegerLiteral,
+            TokenKind::TemplateTail,
+        ]
+    );
 
     // Excessive nesting depth should fail safely without stack overflow
     let deep = "`${".repeat(70) + "1" + &"}`".repeat(70);
-    assert!(Lexer::new(&deep).next_token().is_err());
+    assert!(tokenize(&deep).is_err());
 }
 
 #[test]
@@ -1211,7 +1265,7 @@ fn test_trojan_source_bidi_control_rejected() {
     assert!(Lexer::new("\"safe \u{202E} evil\"").next_token().is_err());
     assert!(Lexer::new("'\u{202E}'").next_token().is_err());
     assert!(Lexer::new("`safe \u{2066} evil`").next_token().is_err());
-    assert!(Lexer::new("`${\u{202E}}`").next_token().is_err());
+    assert!(tokenize("`${\u{202E}}`").is_err());
 
     // Escaped BiDi control character in string literal is explicit and allowed
     assert!(Lexer::new(r#""\u202E""#).next_token().is_ok());

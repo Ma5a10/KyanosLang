@@ -2622,3 +2622,78 @@ switch (x) {
     };
     assert_eq!(s3.cases.len(), 1);
 }
+
+#[test]
+fn test_single_pass_template_string_parsing() {
+    // 1. Multi-line interpolation expressions succeed inside `${ ... }` grouping scope.
+    let multiline = parse_expr_ok("`sum = ${a +\n b}`");
+    let ExprKind::TemplateString(parts) = &multiline.kind else {
+        panic!("expected TemplateString");
+    };
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0], TemplateStringPart::String("sum = ".to_string()));
+    assert!(matches!(parts[1], TemplateStringPart::Expr(_)));
+
+    // 2. Nested templates parse cleanly with accurate AST structure and spans.
+    let nested = parse_expr_ok("`outer ${`mid ${1 + 2}`} end`");
+    let ExprKind::TemplateString(outer_parts) = &nested.kind else {
+        panic!("expected outer TemplateString");
+    };
+    assert_eq!(outer_parts.len(), 3);
+    assert_eq!(
+        outer_parts[0],
+        TemplateStringPart::String("outer ".to_string())
+    );
+    assert_eq!(
+        outer_parts[2],
+        TemplateStringPart::String(" end".to_string())
+    );
+    let TemplateStringPart::Expr(inner_expr) = &outer_parts[1] else {
+        panic!("expected nested template expr");
+    };
+    let ExprKind::TemplateString(inner_parts) = &inner_expr.kind else {
+        panic!("expected inner TemplateString");
+    };
+    assert_eq!(inner_parts.len(), 2);
+    assert_eq!(
+        inner_parts[0],
+        TemplateStringPart::String("mid ".to_string())
+    );
+
+    // 3. Empty interpolation reports syntax error and recovers the rest of the template.
+    let (empty_expr, empty_errs) = parse_expr("`hi ${} there`");
+    assert_eq!(empty_errs.len(), 1);
+    assert!(empty_errs[0].message().contains("cannot be empty"));
+    let ExprKind::TemplateString(empty_parts) = empty_expr.kind else {
+        panic!("expected TemplateString");
+    };
+    assert_eq!(empty_parts.len(), 3);
+    assert_eq!(
+        empty_parts[2],
+        TemplateStringPart::String(" there".to_string())
+    );
+
+    // 4. Trailing tokens inside `${ ... }` recover cleanly at `}` including past nested templates.
+    let (trailing_expr, trailing_errs) = parse_expr("`a ${1 `b ${2}` } c`");
+    assert!(!trailing_errs.is_empty());
+    let ExprKind::TemplateString(trailing_parts) = trailing_expr.kind else {
+        panic!("expected TemplateString");
+    };
+    assert_eq!(
+        trailing_parts.last(),
+        Some(&TemplateStringPart::String(" c".to_string()))
+    );
+
+    // 5. Pure template nesting respects `max_recursion_depth` without allocating sub-parsers.
+    use kyanos_parse::{parse_expr_with_options, ParseOptions};
+    let strict_opts = ParseOptions::new().with_max_recursion_depth(3);
+    let deep_tpl = format!("{}`1`{}", "`${".repeat(4), "}`".repeat(4));
+    let (_, deep_errs) = parse_expr_with_options(&deep_tpl, strict_opts);
+    assert!(deep_errs
+        .iter()
+        .any(|e| *e.kind() == ParseErrorKind::RecursionLimitExceeded));
+
+    // 6. Unclosed interpolation does not hang or panic.
+    let unclosed_out = parse("let s = `hi ${x");
+    assert!(unclosed_out.has_errors());
+}

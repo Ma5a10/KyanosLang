@@ -51,104 +51,142 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a `TemplateStringLiteral` token into `ExprKind::TemplateString`.
-    ///
-    /// Embedded `${expr}` interpolations are parsed using a child [`Parser`] with
-    /// shifted byte offsets and shared sequential `NodeId` allocation.
+    /// Parses a template literal (`TemplateNoSubstitution` or `TemplateHead ... TemplateTail`)
+    /// into `ExprKind::TemplateString`.
     pub(crate) fn parse_template_string_expr(&mut self, tok: Token) -> ParseResult<Expr> {
-        let raw = self.slice(tok.span);
-        let inner = strip_delimiters(raw, 1, 1, tok.span)?;
-        let inner_base_offset = tok.span.start + 1;
-
-        let mut parts = Vec::new();
-        let mut current_text = String::new();
-        let mut idx = 0usize;
-
-        while idx < inner.len() {
-            if inner.get(idx..).is_some_and(|s| s.starts_with("${")) {
-                if !current_text.is_empty() {
-                    parts.push(TemplateStringPart::String(std::mem::take(
-                        &mut current_text,
-                    )));
-                }
-
-                let expr_start = idx + 2;
-                let max_depth = self.options.max_recursion_depth;
-                let expr_end =
-                    find_interpolation_end(inner, expr_start, 0, max_depth).ok_or_else(|| {
-                        ParseError::new(
-                            ParseErrorKind::InvalidLiteral(
-                                "Unterminated template interpolation".to_string(),
-                            ),
-                            tok.span,
-                            "Unterminated '${...}' in template literal",
-                        )
-                    })?;
-
-                let Some(expr_slice) = inner.get(expr_start..expr_end) else {
-                    return Err(ParseError::new(
-                        ParseErrorKind::InvalidLiteral("Invalid interpolation span".to_string()),
-                        tok.span,
-                        "Invalid interpolation span in template literal",
-                    ));
-                };
-                let expr_abs_offset = inner_base_offset + expr_start;
-                let expr_span = Span::new(expr_abs_offset, inner_base_offset + expr_end);
-
-                if expr_slice.trim().is_empty() {
-                    self.report_error(ParseError::syntax(
-                        "Template interpolation '${}' cannot be empty",
-                        expr_span,
-                    ));
-                    let err_id = self.alloc_id();
-                    parts.push(TemplateStringPart::Expr(Box::new(
-                        Expr::error(expr_span).with_id(err_id),
-                    )));
-                } else {
-                    let mut sub_parser = Parser::with_offset_and_state(
-                        expr_slice,
-                        expr_abs_offset,
-                        self.next_node_id,
-                        self.recursion_depth,
-                        self.options,
-                    );
-                    let expr = sub_parser.parse_expr_with_recovery();
-                    if !sub_parser.is_eof() {
-                        let trailing = sub_parser.current();
-                        sub_parser.report_error(ParseError::unexpected(
-                            "'}'",
-                            trailing.kind,
-                            trailing.span,
-                        ));
-                    }
-                    self.next_node_id = sub_parser.next_node_id_raw();
-                    self.errors.extend(sub_parser.take_errors());
-                    parts.push(TemplateStringPart::Expr(Box::new(expr)));
-                }
-
-                idx = expr_end + 1;
-                continue;
-            }
-
-            let Some(ch) = inner.get(idx..).and_then(|s| s.chars().next()) else {
-                break;
-            };
-            if ch == '\\' {
-                idx += 1;
-                let escaped = decode_escape_at(inner, &mut idx, tok.span)?;
-                current_text.push(escaped);
-            } else {
-                current_text.push(ch);
-                idx += ch.len_utf8();
-            }
+        if tok.kind == TokenKind::TemplateNoSubstitution {
+            let value = self.decode_template_segment(tok, 1, 1)?;
+            let id = self.alloc_id();
+            return Ok(Expr::new(
+                ExprKind::TemplateString(vec![TemplateStringPart::String(value)]),
+                tok.span,
+            )
+            .with_id(id));
         }
 
-        if !current_text.is_empty() || parts.is_empty() {
-            parts.push(TemplateStringPart::String(current_text));
+        if tok.kind != TokenKind::TemplateHead {
+            return Err(ParseError::unexpected("template literal", tok.kind, tok.span));
+        }
+
+        self.enter_recursion()?;
+        let res = self.parse_interpolated_template_expr(tok);
+        self.exit_recursion();
+        res
+    }
+
+    fn parse_interpolated_template_expr(&mut self, head_tok: Token) -> ParseResult<Expr> {
+        let start_pos = head_tok.span.start;
+        let mut parts = Vec::new();
+        let head_text = self.decode_template_segment(head_tok, 1, 2)?;
+        if !head_text.is_empty() {
+            parts.push(TemplateStringPart::String(head_text));
+        }
+
+        let mut interp_open_end = head_tok.span.end;
+        let mut end_pos = head_tok.span.end;
+
+        loop {
+            if self.at(TokenKind::TemplateMiddle) || self.at(TokenKind::TemplateTail) {
+                let expr_span = Span::new(interp_open_end, self.current().span.start);
+                self.report_error(ParseError::syntax(
+                    "Template interpolation '${}' cannot be empty",
+                    expr_span,
+                ));
+                let err_id = self.alloc_id();
+                parts.push(TemplateStringPart::Expr(Box::new(
+                    Expr::error(expr_span).with_id(err_id),
+                )));
+            } else {
+                let expr = self.with_grouping(|p| p.parse_expr_with_recovery());
+                parts.push(TemplateStringPart::Expr(Box::new(expr)));
+
+                if !self.at(TokenKind::TemplateMiddle)
+                    && !self.at(TokenKind::TemplateTail)
+                    && !self.is_eof()
+                {
+                    let trailing = self.current();
+                    self.report_error(ParseError::unexpected(
+                        "'}'",
+                        trailing.kind,
+                        trailing.span,
+                    ));
+                    self.recover_to_template_boundary();
+                }
+            }
+
+            match self.current().kind {
+                TokenKind::TemplateMiddle => {
+                    let mid_tok = self.bump();
+                    let mid_text = self.decode_template_segment(mid_tok, 1, 2)?;
+                    if !mid_text.is_empty() {
+                        parts.push(TemplateStringPart::String(mid_text));
+                    }
+                    interp_open_end = mid_tok.span.end;
+                    end_pos = mid_tok.span.end;
+                }
+                TokenKind::TemplateTail => {
+                    let tail_tok = self.bump();
+                    let tail_text = self.decode_template_segment(tail_tok, 1, 1)?;
+                    if !tail_text.is_empty() {
+                        parts.push(TemplateStringPart::String(tail_text));
+                    }
+                    end_pos = tail_tok.span.end;
+                    break;
+                }
+                _ => {
+                    let unexpected = self.current();
+                    let err_end = unexpected.span.end.max(end_pos);
+                    self.report_error(ParseError::new(
+                        ParseErrorKind::InvalidLiteral(
+                            "Unterminated template interpolation".to_string(),
+                        ),
+                        Span::new(start_pos, err_end),
+                        "Unterminated '${...}' in template literal",
+                    ));
+                    end_pos = err_end;
+                    break;
+                }
+            }
         }
 
         let id = self.alloc_id();
-        Ok(Expr::new(ExprKind::TemplateString(parts), tok.span).with_id(id))
+        Ok(Expr::new(ExprKind::TemplateString(parts), Span::new(start_pos, end_pos)).with_id(id))
+    }
+
+    fn decode_template_segment(
+        &self,
+        tok: Token,
+        prefix_len: usize,
+        suffix_len: usize,
+    ) -> ParseResult<String> {
+        let raw = self.slice(tok.span);
+        let inner = strip_delimiters(raw, prefix_len, suffix_len, tok.span)?;
+        unescape_string(inner, tok.span)
+    }
+
+    /// Advances past trailing tokens inside a malformed `${...}` until reaching the enclosing
+    /// template's `TemplateMiddle` or `TemplateTail` (skipping over any inner nested templates).
+    fn recover_to_template_boundary(&mut self) {
+        let mut nested_depth = 0usize;
+        while !self.is_eof() {
+            match self.current().kind {
+                TokenKind::TemplateHead => {
+                    nested_depth += 1;
+                    self.bump();
+                }
+                TokenKind::TemplateMiddle if nested_depth == 0 => break,
+                TokenKind::TemplateTail => {
+                    if nested_depth == 0 {
+                        break;
+                    }
+                    nested_depth -= 1;
+                    self.bump();
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
     }
 }
 
@@ -383,116 +421,4 @@ fn decode_unicode_escape(inner: &str, idx: &mut usize, span: Span) -> ParseResul
             format!("Invalid Unicode scalar value U+{:X}", value),
         )
     })
-}
-
-/// Finds the byte index of the closing `}` matching `${` at `start`, mirroring lexer nesting rules.
-fn find_interpolation_end(
-    inner: &str,
-    start: usize,
-    depth: usize,
-    max_depth: usize,
-) -> Option<usize> {
-    if depth >= max_depth {
-        return None;
-    }
-    let mut brace_depth = 1usize;
-    let mut i = start;
-
-    while i < inner.len() {
-        let rest = &inner[i..];
-        let ch = rest.chars().next()?;
-        match ch {
-            '{' => {
-                brace_depth += 1;
-                i += 1;
-            }
-            '}' => {
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    return Some(i);
-                }
-                i += 1;
-            }
-            'c' if rest.starts_with("c\"") => {
-                i = skip_quoted(inner, i + 2, '"')?;
-            }
-            '"' => {
-                i = skip_quoted(inner, i + 1, '"')?;
-            }
-            '\'' => {
-                i = skip_quoted(inner, i + 1, '\'')?;
-            }
-            '`' => {
-                i = skip_nested_template(inner, i + 1, depth + 1, max_depth)?;
-            }
-            '/' if rest.starts_with("//") => {
-                i += 2;
-                while i < inner.len() {
-                    let c = inner[i..].chars().next()?;
-                    i += c.len_utf8();
-                    if c == '\n' || c == '\r' || c == '\u{2028}' || c == '\u{2029}' {
-                        break;
-                    }
-                }
-            }
-            '/' if rest.starts_with("/*") => {
-                let end_rel = inner[i + 2..].find("*/")?;
-                i = i + 2 + end_rel + 2;
-            }
-            '\\' => {
-                i += 1;
-                let escaped = inner[i..].chars().next()?;
-                i += escaped.len_utf8();
-            }
-            _ => {
-                i += ch.len_utf8();
-            }
-        }
-    }
-    None
-}
-
-/// Skips past a quoted string or char literal inside an interpolation expression.
-fn skip_quoted(inner: &str, mut i: usize, quote: char) -> Option<usize> {
-    while i < inner.len() {
-        let ch = inner[i..].chars().next()?;
-        i += ch.len_utf8();
-        if ch == quote {
-            return Some(i);
-        }
-        if ch == '\\' {
-            let escaped = inner[i..].chars().next()?;
-            i += escaped.len_utf8();
-        }
-    }
-    None
-}
-
-/// Skips past a nested template string literal inside an interpolation expression.
-fn skip_nested_template(
-    inner: &str,
-    mut i: usize,
-    depth: usize,
-    max_depth: usize,
-) -> Option<usize> {
-    if depth >= max_depth {
-        return None;
-    }
-    while i < inner.len() {
-        if inner[i..].starts_with("${") {
-            let close = find_interpolation_end(inner, i + 2, depth + 1, max_depth)?;
-            i = close + 1;
-            continue;
-        }
-        let ch = inner[i..].chars().next()?;
-        i += ch.len_utf8();
-        if ch == '`' {
-            return Some(i);
-        }
-        if ch == '\\' {
-            let escaped = inner[i..].chars().next()?;
-            i += escaped.len_utf8();
-        }
-    }
-    None
 }

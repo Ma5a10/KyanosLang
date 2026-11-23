@@ -213,12 +213,24 @@ CStringLiteral: 'c"' ( EscapeSequence | ~["\\\r\n])* '"';
 // Char Literal ('a')
 CharLiteral: '\'' ( EscapeSequence | ~['\\\r\n]) '\'';
 
-// Template String Literal (`...` with ${expr} interpolation, desugared to expr.toString() concatenation)
-TemplateStringLiteral:
-	'`' (EscapeSequence | TemplateInterpolation | ~[`\\\r\n])* '`';
+// Template String Literals (`...` with ${expr} interpolation, desugared to expr.toString() concatenation)
+// Split into 4 tokens using lexer brace-depth stack tracking so interpolation expressions are
+// tokenized and parsed in a single pass:
+// - TemplateNoSubstitution: `...` (no interpolation)
+// - TemplateHead:           `...${ (starts interpolation; pushes brace depth 0)
+// - TemplateMiddle:         }...${ (closes current interpolation on '}' at depth 0, starts next)
+// - TemplateTail:           }...`  (closes current interpolation on '}' at depth 0, ends template)
+TemplateNoSubstitution:
+	'`' (EscapeSequence | ~[`\\\r\n$] | '$' ~'{')* '`';
 
-fragment TemplateInterpolation:
-	'${' (StringLiteral | CharLiteral | ~[}\r\n])* '}';
+TemplateHead:
+	'`' (EscapeSequence | ~[`\\\r\n$] | '$' ~'{')* '${';
+
+TemplateMiddle:
+	'}' (EscapeSequence | ~[`\\\r\n$] | '$' ~'{')* '${';
+
+TemplateTail:
+	'}' (EscapeSequence | ~[`\\\r\n$] | '$' ~'{')* '`';
 
 fragment EscapeSequence:
 	'\\' (['"`$\\/bfnrtv] | '0' | UnicodeEscape);

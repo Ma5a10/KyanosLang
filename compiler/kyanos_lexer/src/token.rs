@@ -192,7 +192,10 @@ pub enum TokenKind {
     StringLiteral,
     CStringLiteral,
     CharLiteral,
-    TemplateStringLiteral,
+    TemplateNoSubstitution,
+    TemplateHead,
+    TemplateMiddle,
+    TemplateTail,
 
     // Identifiers
     Identifier,
@@ -311,7 +314,10 @@ impl TokenKind {
                 | Self::StringLiteral
                 | Self::CStringLiteral
                 | Self::CharLiteral
-                | Self::TemplateStringLiteral
+                | Self::TemplateNoSubstitution
+                | Self::TemplateHead
+                | Self::TemplateMiddle
+                | Self::TemplateTail
                 | Self::True
                 | Self::False
                 | Self::Null

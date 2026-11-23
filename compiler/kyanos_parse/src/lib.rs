@@ -155,45 +155,17 @@ impl<'a> Parser<'a> {
 
     /// Creates a new parser for the given Kyanos source code with custom [`ParseOptions`].
     pub fn with_options(source: &'a str, options: ParseOptions) -> Self {
-        Self::with_offset_and_state(source, 0, 0, 0, options)
+        let (stream, errors) = TokenStream::with_offset(source, 0);
+        Self::from_parts(stream, errors, 0, options)
     }
 
     /// Creates a parser with a starting byte offset and initial `NodeId` counter.
     ///
-    /// Used when recursively parsing embedded expressions (e.g. inside template strings)
-    /// so generated `Span`s and `NodeId`s remain globally consistent within the module.
+    /// Used when parsing embedded source fragments while preserving global `Span` offsets
+    /// and sequential `NodeId` allocation.
     pub fn with_offset(source: &'a str, base_offset: usize, start_node_id: u32) -> Self {
-        Self::with_offset_and_state(
-            source,
-            base_offset,
-            start_node_id,
-            0,
-            ParseOptions::default(),
-        )
-    }
-
-    /// Creates a parser with explicit offset, recursion depth, and options (for nested template parses).
-    pub(crate) fn with_offset_and_state(
-        source: &'a str,
-        base_offset: usize,
-        start_node_id: u32,
-        recursion_depth: usize,
-        options: ParseOptions,
-    ) -> Self {
         let (stream, errors) = TokenStream::with_offset(source, base_offset);
-        Self {
-            stream,
-            errors,
-            next_node_id: start_node_id,
-            options,
-            memo: BacktrackMemo::default(),
-            grouping_depth: 0,
-            recursion_depth,
-            eos_allows_else: false,
-            eos_allows_while: false,
-            stop_optional_before_ternary: false,
-            pending_ternary_then: 0,
-        }
+        Self::from_parts(stream, errors, start_node_id, ParseOptions::default())
     }
 
     /// Creates a parser directly from an existing [`TokenStream`] using default options.
@@ -203,10 +175,19 @@ impl<'a> Parser<'a> {
 
     /// Creates a parser directly from an existing [`TokenStream`] with custom [`ParseOptions`].
     pub fn from_stream_with_options(stream: TokenStream<'a>, options: ParseOptions) -> Self {
+        Self::from_parts(stream, Vec::new(), 0, options)
+    }
+
+    fn from_parts(
+        stream: TokenStream<'a>,
+        errors: Vec<ParseError>,
+        next_node_id: u32,
+        options: ParseOptions,
+    ) -> Self {
         Self {
             stream,
-            errors: Vec::new(),
-            next_node_id: 0,
+            errors,
+            next_node_id,
             options,
             memo: BacktrackMemo::default(),
             grouping_depth: 0,

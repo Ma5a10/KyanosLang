@@ -22,6 +22,11 @@ pub struct Lexer<'a> {
     /// Tracks whether a line terminator was encountered before or inside a trivia token (comment),
     /// ensuring the next non-trivia token still receives `has_leading_newline = true`.
     pending_newline: bool,
+    /// Stack of open `{` depths within active template `${...}` interpolations.
+    ///
+    /// Each entry starts at `0` upon scanning `${`. Seeing `}` when top is `0` ends the
+    /// interpolation and resumes scanning template text (`TemplateMiddle` or `TemplateTail`).
+    template_brace_depths: Vec<usize>,
 }
 
 impl<'a> Lexer<'a> {
@@ -30,6 +35,7 @@ impl<'a> Lexer<'a> {
             input,
             cursor: 0,
             pending_newline: false,
+            template_brace_depths: Vec::new(),
         }
     }
 
@@ -211,6 +217,14 @@ impl<'a> Lexer<'a> {
         let first = match self.peek() {
             Some(c) => c,
             None => {
+                if !self.template_brace_depths.is_empty() {
+                    self.template_brace_depths.clear();
+                    self.pending_newline = had_newline;
+                    return Err((
+                        "Unterminated template interpolation: unclosed '${'".to_string(),
+                        Span::new(start, start),
+                    ));
+                }
                 self.pending_newline = false;
                 return Ok(Token::new(
                     TokenKind::Eof,
@@ -306,13 +320,29 @@ impl<'a> Lexer<'a> {
             '\'' => self.scan_char_literal(),
 
             // Template Strings Literal
-            '`' => self.scan_template_string_literal(),
+            '`' => self.scan_template_fragment(true),
             // hash rules
             '#' => self.hash_match(),
 
             // one symbols
-            '{' => Ok(TokenKind::OpenBrace),
-            '}' => Ok(TokenKind::CloseBrace),
+            '{' => {
+                if let Some(depth) = self.template_brace_depths.last_mut() {
+                    *depth += 1;
+                }
+                Ok(TokenKind::OpenBrace)
+            }
+            '}' => {
+                if let Some(depth) = self.template_brace_depths.last_mut() {
+                    if *depth > 0 {
+                        *depth -= 1;
+                        Ok(TokenKind::CloseBrace)
+                    } else {
+                        self.scan_template_fragment(false)
+                    }
+                } else {
+                    Ok(TokenKind::CloseBrace)
+                }
+            }
             '(' => Ok(TokenKind::OpenParen),
             ')' => Ok(TokenKind::CloseParen),
             '[' => Ok(TokenKind::OpenBracket),
@@ -855,83 +885,61 @@ impl<'a> Lexer<'a> {
         Ok(TokenKind::IntegerLiteral)
     }
 
-    /// Scans a template string literal: `` `...${expr}...` ``
-    fn scan_template_string_literal(&mut self) -> Result<TokenKind, String> {
-        self.scan_template_string_literal_with_depth(0)
-    }
-
-    fn scan_template_string_literal_with_depth(
-        &mut self,
-        depth: usize,
-    ) -> Result<TokenKind, String> {
-        if depth > MAX_TEMPLATE_NESTING {
-            return Err(
-                "Template string interpolation nesting depth exceeded maximum limit".to_string(),
-            );
-        }
-
+    /// Scans template literal text starting after opening `` ` `` (`is_head == true`)
+    /// or after `}` closing an interpolation (`is_head == false`).
+    fn scan_template_fragment(&mut self, is_head: bool) -> Result<TokenKind, String> {
         while let Some(ch) = self.bump() {
             if ch == '`' {
-                return Ok(TokenKind::TemplateStringLiteral);
+                if !is_head {
+                    self.template_brace_depths.pop();
+                }
+                return Ok(if is_head {
+                    TokenKind::TemplateNoSubstitution
+                } else {
+                    TokenKind::TemplateTail
+                });
+            } else if ch == '$' && self.match_char('{') {
+                if is_head {
+                    if self.template_brace_depths.len() >= MAX_TEMPLATE_NESTING {
+                        return Err(
+                            "Template string interpolation nesting depth exceeded maximum limit"
+                                .to_string(),
+                        );
+                    }
+                    self.template_brace_depths.push(0);
+                }
+                return Ok(if is_head {
+                    TokenKind::TemplateHead
+                } else {
+                    TokenKind::TemplateMiddle
+                });
             } else if ch == '\\' {
-                self.scan_escape_sequence()?;
+                if let Err(err) = self.scan_escape_sequence() {
+                    if !is_head {
+                        self.template_brace_depths.pop();
+                    }
+                    return Err(err);
+                }
             } else if Self::is_bidi_control(ch) {
+                if !is_head {
+                    self.template_brace_depths.pop();
+                }
                 return Err(format!(
                     "Unicode bidirectional control character U+{:04X} is not allowed in template literals",
                     ch as u32
                 ));
-            } else if ch == '$' && self.match_char('{') {
-                // Template interpolation: ${...}
-                let mut brace_depth = 1usize;
-                while let Some(next_ch) = self.bump() {
-                    if Self::is_bidi_control(next_ch) {
-                        return Err(format!(
-                            "Unicode bidirectional control character U+{:04X} is not allowed in template expressions",
-                            next_ch as u32
-                        ));
-                    }
-                    match next_ch {
-                        '{' => brace_depth += 1,
-                        '}' => {
-                            brace_depth -= 1;
-                            if brace_depth == 0 {
-                                break;
-                            }
-                        }
-                        'c' if self.peek() == Some('"') => {
-                            self.bump(); // consume '"'
-                            self.scan_string_contents(TokenKind::CStringLiteral)?;
-                        }
-                        '"' => {
-                            self.scan_string_contents(TokenKind::StringLiteral)?;
-                        }
-                        '\'' => {
-                            self.scan_char_literal()?;
-                        }
-                        '`' => {
-                            self.scan_template_string_literal_with_depth(depth + 1)?;
-                        }
-                        '/' if self.match_char('/') => {
-                            self.scan_single_line_comment()?;
-                        }
-                        '/' if self.match_char('*') => {
-                            self.scan_multi_line_comment()?;
-                        }
-                        '\\' => {
-                            self.scan_escape_sequence()?;
-                        }
-                        _ => {}
-                    }
-                }
-                if brace_depth > 0 {
-                    return Err("Unterminated template interpolation: unclosed '${'".to_string());
-                }
             } else if Self::is_line_terminator(ch) {
+                if !is_head {
+                    self.template_brace_depths.pop();
+                }
                 self.pending_newline = true;
                 return Err(
                     "Unterminated template string literal: newline in template literal".to_string(),
                 );
             }
+        }
+        if !is_head {
+            self.template_brace_depths.pop();
         }
         Err("Unterminated template string literal: unexpected EOF".to_string())
     }
