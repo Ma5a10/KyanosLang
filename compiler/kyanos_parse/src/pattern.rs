@@ -181,14 +181,18 @@ impl<'a> Parser<'a> {
     fn parse_struct_pattern(&mut self, struct_name: TypeName) -> ParseResult<Pattern> {
         let start = struct_name.span;
         self.expect(TokenKind::OpenBrace, "'{'")?;
-        let mut fields = Vec::new();
+        let fields = self.with_grouping(|p| {
+            let mut fields = Vec::new();
 
-        while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            fields.push(self.parse_struct_field_pattern()?);
-            if self.eat(TokenKind::Comma).is_none() {
-                break;
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                fields.push(p.parse_struct_field_pattern()?);
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
             }
-        }
+
+            Ok::<_, ParseError>(fields)
+        })?;
 
         self.expect(TokenKind::CloseBrace, "'}'")?;
         let span = self.span_from(start);
@@ -235,66 +239,67 @@ impl<'a> Parser<'a> {
 
     fn parse_tuple_pattern_elements(&mut self) -> ParseResult<Vec<TuplePatternElement>> {
         self.expect(TokenKind::OpenBracket, "'['")?;
-        self.grouping_depth += 1;
-        let mut list = Vec::new();
-        let res = (|| {
-            while !self.at(TokenKind::CloseBracket) && !self.is_eof() {
-                if let Some(ellipsis) = self.eat(TokenKind::Ellipsis) {
-                    let pat = self.parse_pattern()?;
-                    let span = self.span_from(ellipsis.span);
+        let list = self.with_grouping(|p| {
+            let mut list = Vec::new();
+            while !p.at(TokenKind::CloseBracket) && !p.is_eof() {
+                if let Some(ellipsis) = p.eat(TokenKind::Ellipsis) {
+                    let pat = p.parse_pattern()?;
+                    let span = p.span_from(ellipsis.span);
                     list.push(TuplePatternElement::rest(pat, span));
                 } else {
-                    let pat = self.parse_pattern()?;
+                    let pat = p.parse_pattern()?;
                     list.push(TuplePatternElement::normal(pat));
                 }
-                if self.eat(TokenKind::Comma).is_none() {
+                if p.eat(TokenKind::Comma).is_none() {
                     break;
                 }
             }
-            Ok::<_, ParseError>(())
-        })();
-        self.grouping_depth -= 1;
-        res?;
+            Ok::<_, ParseError>(list)
+        })?;
         self.expect(TokenKind::CloseBracket, "']'")?;
         Ok(list)
     }
 
     fn parse_object_pattern_props(&mut self) -> ParseResult<Vec<ObjectPatternProp>> {
         self.expect(TokenKind::OpenBrace, "'{'")?;
-        let mut props = Vec::new();
+        let props = self.with_grouping(|p| {
+            let mut props = Vec::new();
 
-        while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            if let Some(ellipsis) = self.eat(TokenKind::Ellipsis) {
-                let target_tok = self.expect(TokenKind::Identifier, "rest binding identifier")?;
-                let target = Ident::new(self.slice(target_tok.span), target_tok.span);
-                let span = self.span_from(ellipsis.span);
-                props.push(ObjectPatternProp::Rest { target, span });
-            } else {
-                let name_tok = self.expect(TokenKind::Identifier, "property identifier")?;
-                let name = Ident::new(self.slice(name_tok.span), name_tok.span);
-                let target = if self.eat(TokenKind::Colon).is_some() {
-                    Some(self.parse_binding_target()?)
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                if let Some(ellipsis) = p.eat(TokenKind::Ellipsis) {
+                    let target_tok = p.expect(TokenKind::Identifier, "rest binding identifier")?;
+                    let target = Ident::new(p.slice(target_tok.span), target_tok.span);
+                    let span = p.span_from(ellipsis.span);
+                    props.push(ObjectPatternProp::Rest { target, span });
                 } else {
-                    None
-                };
-                let default = if self.eat(TokenKind::Assign).is_some() {
-                    Some(Box::new(self.parse_expr()?))
-                } else {
-                    None
-                };
-                let span = self.span_from(name_tok.span);
-                props.push(ObjectPatternProp::Property {
-                    name,
-                    target,
-                    default,
-                    span,
-                });
+                    let name_tok = p.expect(TokenKind::Identifier, "property identifier")?;
+                    let name = Ident::new(p.slice(name_tok.span), name_tok.span);
+                    let target = if p.eat(TokenKind::Colon).is_some() {
+                        Some(p.parse_binding_target()?)
+                    } else {
+                        None
+                    };
+                    let default = if p.eat(TokenKind::Assign).is_some() {
+                        Some(Box::new(p.parse_expr()?))
+                    } else {
+                        None
+                    };
+                    let span = p.span_from(name_tok.span);
+                    props.push(ObjectPatternProp::Property {
+                        name,
+                        target,
+                        default,
+                        span,
+                    });
+                }
+
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
             }
 
-            if self.eat(TokenKind::Comma).is_none() {
-                break;
-            }
-        }
+            Ok::<_, ParseError>(props)
+        })?;
 
         self.expect(TokenKind::CloseBrace, "'}'")?;
         Ok(props)

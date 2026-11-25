@@ -202,7 +202,9 @@ impl<'a> Parser<'a> {
         match tok.kind {
             TokenKind::Identifier => {
                 let name = self.parse_type_name()?;
-                let type_args = if self.at(TokenKind::LessThan) {
+                let type_args = if self.at(TokenKind::LessThan)
+                    && (self.grouping_depth > 0 || !self.current().has_leading_newline)
+                {
                     Some(self.parse_type_arguments()?)
                 } else {
                     None
@@ -271,7 +273,7 @@ impl<'a> Parser<'a> {
                         } else {
                             None
                         };
-                        let params = p.with_grouping(|p| p.parse_parameter_list())?;
+                        let params = p.parse_parameter_list()?;
                         p.expect(TokenKind::Colon, "':'")?;
                         let return_type = p.parse_return_type()?;
                         let member_span = p.span_from(member_start);
@@ -439,7 +441,7 @@ impl<'a> Parser<'a> {
 
     fn parse_type_arguments_inner(&mut self) -> ParseResult<TypeArguments> {
         let open = self.expect(TokenKind::LessThan, "'<'")?;
-        let args = self.with_isolated_ternary_scope(|p| {
+        let args = self.with_grouping(|p| {
             let mut args = Vec::new();
             loop {
                 args.push(p.parse_type()?);
@@ -479,7 +481,7 @@ impl<'a> Parser<'a> {
     /// Parses a generic type parameter declaration list: `<T extends Bound = Default>`.
     pub fn parse_type_parameters(&mut self) -> ParseResult<TypeParameters> {
         let open = self.expect(TokenKind::LessThan, "'<'")?;
-        let params = self.with_isolated_ternary_scope(|p| {
+        let params = self.with_grouping(|p| {
             let mut params = Vec::new();
             loop {
                 let name_tok = p.expect(TokenKind::Identifier, "type parameter name")?;

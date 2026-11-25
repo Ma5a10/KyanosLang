@@ -422,6 +422,19 @@ impl<'a> Parser<'a> {
         res
     }
 
+    /// Executes `f` inside a statement block where outer expression grouping does not
+    /// suppress Swift-style newline statement boundaries.
+    #[inline]
+    pub(crate) fn with_block_statement_scope<F, T>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        let prev_grouping = std::mem::replace(&mut self.grouping_depth, 0);
+        let res = self.with_isolated_ternary_scope(f);
+        self.grouping_depth = prev_grouping;
+        res
+    }
+
     /// Runs `f` with `stop_optional_before_ternary` set to `stop` (used for `is` / `as` RHS types).
     #[inline]
     pub(crate) fn with_stop_optional_before_ternary<F, T>(&mut self, stop: bool, f: F) -> T

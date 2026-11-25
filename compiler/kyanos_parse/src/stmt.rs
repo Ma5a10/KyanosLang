@@ -28,7 +28,7 @@ impl<'a> Parser<'a> {
         let open = self.expect(TokenKind::OpenBrace, "'{'")?;
 
         let mut statements = Vec::new();
-        self.with_isolated_ternary_scope(|p| {
+        self.with_block_statement_scope(|p| {
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
                 let stmt = p.parse_block_item();
                 statements.push(stmt);

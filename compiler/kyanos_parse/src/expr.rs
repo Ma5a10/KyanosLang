@@ -384,7 +384,9 @@ impl<'a> Parser<'a> {
                     .parse_call_postfix(lhs.clone(), Some(type_args))
                     .map(Some);
             }
-            if next.kind == TokenKind::OpenBrace && !next.has_leading_newline {
+            if next.kind == TokenKind::OpenBrace
+                && (self.grouping_depth > 0 || !next.has_leading_newline)
+            {
                 if let Some(struct_name) = expr_to_type_name(lhs) {
                     return self
                         .parse_struct_instantiation_body(struct_name, Some(type_args))
@@ -581,7 +583,7 @@ impl<'a> Parser<'a> {
         let mut cache_arrow_failure = true;
 
         // Speculatively parse as an arrow parameter list `(params) (: ret)? => body`.
-        match self.with_grouping(|p| p.parse_parameter_list()) {
+        match self.parse_parameter_list() {
             Ok(params) => {
                 let definitely_params = params_require_arrow(&params);
                 let return_type = if self.eat(TokenKind::Colon).is_some() {
@@ -665,7 +667,7 @@ impl<'a> Parser<'a> {
     fn parse_generic_arrow_expr(&mut self) -> ParseResult<Expr> {
         let start = self.current_span();
         let type_parameters = Some(self.parse_type_parameters()?);
-        let params = self.with_grouping(|p| p.parse_parameter_list())?;
+        let params = self.parse_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
@@ -687,7 +689,7 @@ impl<'a> Parser<'a> {
                 ident_tok.span,
             ))
         } else {
-            self.with_grouping(|p| p.parse_parameter_list())
+            self.parse_parameter_list()
         }
     }
 
@@ -744,7 +746,7 @@ impl<'a> Parser<'a> {
 
     fn parse_object_literal(&mut self) -> ParseResult<Expr> {
         let open = self.expect(TokenKind::OpenBrace, "'{'")?;
-        let members = self.with_isolated_ternary_scope(|p| {
+        let members = self.with_grouping(|p| {
             let mut members = Vec::new();
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
                 members.push(p.parse_object_member()?);
@@ -860,7 +862,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.with_grouping(|p| p.parse_parameter_list())?;
+        let params = self.parse_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
@@ -886,7 +888,7 @@ impl<'a> Parser<'a> {
     ) -> ParseResult<Expr> {
         let start = struct_name.span;
         self.expect(TokenKind::OpenBrace, "'{'")?;
-        let fields = self.with_isolated_ternary_scope(|p| {
+        let fields = self.with_grouping(|p| {
             let mut fields = Vec::new();
 
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {

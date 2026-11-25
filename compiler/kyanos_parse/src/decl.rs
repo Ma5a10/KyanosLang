@@ -358,7 +358,7 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::CloseParen, "')'")?;
             AttributeInput::Args(args)
         } else if self.eat(TokenKind::Assign).is_some() {
-            AttributeInput::Value(self.parse_expr()?)
+            AttributeInput::Value(self.with_grouping(|p| p.parse_expr())?)
         } else {
             AttributeInput::None
         };
@@ -387,7 +387,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.with_grouping(|p| p.parse_parameter_list())?;
+        let params = self.parse_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
@@ -459,7 +459,7 @@ impl<'a> Parser<'a> {
         let accessibility = self.parse_optional_accessibility();
 
         if self.eat(TokenKind::Constructor).is_some() {
-            let params = self.with_grouping(|p| p.parse_parameter_list())?;
+            let params = self.parse_parameter_list()?;
             let body = self.parse_block()?;
             let span = self.span_from(start);
             return Ok(StructMember::Constructor(ConstructorDecl {
@@ -538,7 +538,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.with_grouping(|p| p.parse_parameter_list())?;
+        let params = self.parse_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
@@ -616,7 +616,7 @@ impl<'a> Parser<'a> {
         let accessibility = self.parse_optional_accessibility();
 
         if self.eat(TokenKind::Constructor).is_some() {
-            let params = self.with_grouping(|p| p.parse_parameter_list())?;
+            let params = self.parse_parameter_list()?;
             let body = self.parse_block()?;
             let span = self.span_from(start);
             return Ok(ClassMember::Constructor(ConstructorDecl {
@@ -655,7 +655,7 @@ impl<'a> Parser<'a> {
             };
             self.bump(); // consume `get` or `set`
             let name = self.parse_class_element_name()?;
-            let params = self.with_grouping(|p| p.parse_parameter_list())?;
+            let params = self.parse_parameter_list()?;
             let return_type = if self.eat(TokenKind::Colon).is_some() {
                 Some(self.parse_type()?)
             } else {
@@ -727,7 +727,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.with_grouping(|p| p.parse_parameter_list())?;
+        let params = self.parse_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
@@ -867,7 +867,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let params = self.with_grouping(|p| p.parse_parameter_list())?;
+            let params = self.parse_parameter_list()?;
             self.expect(TokenKind::Colon, "':'")?;
             let return_type = self.parse_return_type()?;
             self.expect_eos_or_recover();
@@ -1058,7 +1058,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.with_grouping(|p| p.parse_extern_parameter_list())?;
+        let params = self.parse_extern_parameter_list()?;
         let return_type = if self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_type()?)
         } else {
@@ -1102,7 +1102,7 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            let params = self.with_grouping(|p| p.parse_extern_parameter_list())?;
+            let params = self.parse_extern_parameter_list()?;
             let return_type = if self.eat(TokenKind::Colon).is_some() {
                 Some(self.parse_type()?)
             } else {
@@ -1147,27 +1147,30 @@ impl<'a> Parser<'a> {
 
     fn parse_extern_parameter_list(&mut self) -> ParseResult<ExternParameterList> {
         let open = self.expect(TokenKind::OpenParen, "'('")?;
-        let mut params = Vec::new();
-        let mut is_variadic = false;
-        let mut rest = None;
+        let (params, is_variadic, rest) = self.with_grouping(|p| {
+            let mut params = Vec::new();
+            let mut is_variadic = false;
+            let mut rest = None;
 
-        while !self.at(TokenKind::CloseParen) && !self.is_eof() {
-            if self.at(TokenKind::Ellipsis) {
-                if self.peek_kind(1) == TokenKind::Identifier {
-                    rest = Some(self.parse_rest_parameter()?);
-                } else {
-                    self.bump(); // consume '...'
-                    is_variadic = true;
+            while !p.at(TokenKind::CloseParen) && !p.is_eof() {
+                if p.at(TokenKind::Ellipsis) {
+                    if p.peek_kind(1) == TokenKind::Identifier {
+                        rest = Some(p.parse_rest_parameter()?);
+                    } else {
+                        p.bump(); // consume '...'
+                        is_variadic = true;
+                    }
+                    p.eat(TokenKind::Comma);
+                    break;
                 }
-                self.eat(TokenKind::Comma);
-                break;
-            }
 
-            params.push(self.parse_parameter()?);
-            if self.eat(TokenKind::Comma).is_none() {
-                break;
+                params.push(p.parse_parameter()?);
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
             }
-        }
+            Ok::<_, ParseError>((params, is_variadic, rest))
+        })?;
 
         self.expect(TokenKind::CloseParen, "')'")?;
         let span = self.span_from(open.span);

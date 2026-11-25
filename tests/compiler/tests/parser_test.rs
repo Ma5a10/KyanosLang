@@ -2697,3 +2697,175 @@ fn test_single_pass_template_string_parsing() {
     let unclosed_out = parse("let s = `hi ${x");
     assert!(unclosed_out.has_errors());
 }
+
+#[test]
+fn test_generic_grouping_newline_boundary_and_param_consistency() {
+    // 1. `<...>` type arguments and type parameters allow multiline postfix type syntax.
+    let ty_args = parse_type_ok("Box<int\n[]\n?>");
+    let TypeKind::Reference(outer_ref) = ty_args.kind else {
+        panic!("expected TypeKind::Reference");
+    };
+    let args = outer_ref.type_arguments.expect("expected type arguments");
+    assert_eq!(args.args.len(), 1);
+    assert!(matches!(args.args[0].kind, TypeKind::Optional(_)));
+
+    let generic_fn = parse("function f<T extends int\n[] = int\n[]>(x: T) {}");
+    assert!(
+        !generic_fn.has_errors(),
+        "multiline type parameters should parse without error: {:?}",
+        generic_fn.errors
+    );
+    assert_eq!(generic_fn.program.elements.len(), 1);
+
+    // 2. Extern parameter lists continue across newlines just like normal parameter lists.
+    let extern_prog = parse("extern \"C\" function printf(\n fmt: *char,\n ...\n): int;");
+    assert!(
+        !extern_prog.has_errors(),
+        "multiline extern parameter list should parse without error: {:?}",
+        extern_prog.errors
+    );
+    assert_eq!(extern_prog.program.elements.len(), 1);
+
+    // 3. `parse_primary_type` stops before `<` on a new line outside `(...)` / `<...>`,
+    //    so a subsequent generic arrow expression on the next line is parsed separately.
+    let block = parse_block_ok("{\n let x: Foo\n<T>(a: T) => a\n}");
+    assert_eq!(block.statements.len(), 2);
+    let StmtKind::Variable(var_stmt) = &block.statements[0].kind else {
+        panic!("expected Variable statement");
+    };
+    let ty = var_stmt.declarations[0]
+        .ty
+        .as_ref()
+        .expect("expected annotation");
+    let TypeKind::Reference(type_ref) = &ty.kind else {
+        panic!("expected TypeKind::Reference");
+    };
+    assert!(
+        type_ref.type_arguments.is_none(),
+        "newline `<T>` must not attach to `Foo`"
+    );
+    let StmtKind::Expr(arrow_expr) = &block.statements[1].kind else {
+        panic!("expected Expr statement");
+    };
+    assert!(matches!(arrow_expr.kind, ExprKind::ArrowFunction(_)));
+
+    // 4. Inside `(...)`, generic struct instantiation `Pair<T>\n{ ... }` works across newlines,
+    //    matching non-generic `Point\n{ ... }`.
+    let non_generic = parse_expr_ok("(Point\n{ a: 1 })");
+    let ExprKind::Parenthesized(inner_ng) = non_generic.kind else {
+        panic!("expected Parenthesized");
+    };
+    assert!(matches!(inner_ng.kind, ExprKind::StructInstantiation(_)));
+
+    let generic = parse_expr_ok("(Pair<int>\n{ a: 1 })");
+    let ExprKind::Parenthesized(inner_g) = generic.kind else {
+        panic!("expected Parenthesized");
+    };
+    let ExprKind::StructInstantiation(si) = inner_g.kind else {
+        panic!("expected generic StructInstantiation across newline inside grouping");
+    };
+    assert!(si.type_arguments.is_some());
+}
+
+#[test]
+fn test_braced_literals_patterns_attributes_grouping_and_block_reset() {
+    // 1. Multiline expressions inside object literals and struct instantiations continue seamlessly.
+    let obj =
+        parse_expr_ok("{\n timeout: base\n + extra,\n run() {\n let v = foo\n (bar).baz()\n }\n}");
+    let ExprKind::Object(members) = obj.kind else {
+        panic!("expected Object literal");
+    };
+    assert_eq!(members.len(), 2);
+    assert!(matches!(
+        &members[0],
+        ObjectMember::Property {
+            value: Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    ));
+
+    // Inside the object method's statement block, `grouping_depth` is reset to 0 so
+    // `let v = foo` and `(bar).baz()` remain two separate statements rather than `foo(bar)`.
+    let ObjectMember::Method(method) = &members[1] else {
+        panic!("expected ObjectMethod");
+    };
+    assert_eq!(
+        method.body.statements.len(),
+        2,
+        "block statements inside object literal method must keep newline boundaries"
+    );
+    assert!(matches!(
+        method.body.statements[0].kind,
+        StmtKind::Variable(_)
+    ));
+    assert!(matches!(method.body.statements[1].kind, StmtKind::Expr(_)));
+
+    // 2. Multiline expressions inside struct instantiation bodies.
+    let point = parse_expr_ok("Point {\n x: startX\n + offsetX,\n y: 0\n}");
+    let ExprKind::StructInstantiation(si) = point.kind else {
+        panic!("expected StructInstantiation");
+    };
+    assert_eq!(si.fields.len(), 2);
+    assert!(matches!(
+        &si.fields[0],
+        StructFieldInit::Field {
+            value: Some(Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                },
+                ..
+            }),
+            ..
+        }
+    ));
+
+    // 3. Multiline default expression in object destructuring pattern.
+    let pat_stmt = parse_stmt_ok("const {\n port = defaultPort\n + 1\n} = env");
+    let StmtKind::Variable(vstmt) = pat_stmt.kind else {
+        panic!("expected Variable stmt");
+    };
+    let BindingTarget::Object { props, .. } = &vstmt.declarations[0].target else {
+        panic!("expected Object binding target");
+    };
+    assert!(matches!(
+        &props[0],
+        ObjectPatternProp::Property {
+            default: Some(expr),
+            ..
+        } if matches!(expr.kind, ExprKind::Binary { op: BinaryOp::Add, .. })
+    ));
+
+    // 4. Multiline attribute value `#[doc = "a"\n + "b"]`.
+    let attr_prog = parse("#[doc = \"hello \"\n + \"world\"]\nfunction greet() {}");
+    assert!(
+        !attr_prog.has_errors(),
+        "multiline attribute value should parse cleanly: {:?}",
+        attr_prog.errors
+    );
+    assert_eq!(attr_prog.program.elements.len(), 1);
+
+    // 5. Arrow block inside call grouping also isolates block statements from outer grouping_depth.
+    let call_with_arrow = parse_expr_ok("items.map(item => {\n let a = foo\n +bar\n})");
+    let ExprKind::Call { args, .. } = call_with_arrow.kind else {
+        panic!("expected Call");
+    };
+    let ExprKind::ArrowFunction(arrow) = &args[0].expr.kind else {
+        panic!("expected ArrowFunction arg");
+    };
+    let ArrowBody::Block(arrow_block) = &arrow.body else {
+        panic!("expected ArrowBody::Block");
+    };
+    assert_eq!(arrow_block.statements.len(), 2);
+    assert!(matches!(
+        arrow_block.statements[0].kind,
+        StmtKind::Variable(_)
+    ));
+    assert!(matches!(arrow_block.statements[1].kind, StmtKind::Expr(_)));
+}
