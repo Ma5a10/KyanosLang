@@ -2356,14 +2356,16 @@ fn test_braceless_if_do_return_and_eos_flag_isolation() {
     );
 
     let mut leaked_anon_struct = Parser::new("if (a) let x: { a: int else: int }");
-    let anon_err = leaked_anon_struct
-        .parse_stmt()
-        .expect_err("else inside anonymous struct type should fail EOS");
-    assert_eq!(
-        *anon_err.kind(),
-        ParseErrorKind::ExpectedEos {
-            found: TokenKind::Else
-        }
+    let _ = leaked_anon_struct.parse_stmt();
+    assert!(
+        leaked_anon_struct.errors().iter().any(|e| matches!(
+            e.kind(),
+            ParseErrorKind::ExpectedEos {
+                found: TokenKind::Else
+            }
+        )),
+        "expected ExpectedEos(Else) inside anonymous struct type, got: {:?}",
+        leaked_anon_struct.errors()
     );
 
     let mut bad_do_else = Parser::new("if (a) do return else while (c)");
@@ -2868,4 +2870,177 @@ fn test_braced_literals_patterns_attributes_grouping_and_block_reset() {
         StmtKind::Variable(_)
     ));
     assert!(matches!(arrow_block.statements[1].kind, StmtKind::Expr(_)));
+}
+
+#[test]
+fn test_parser_3_2_ternary_float_node_id_and_diagnostics() {
+    // 1. Ternary branches containing `()` or `(a)` before `: b => b` must not steal the `:`.
+    let ternary_unit = parse_expr_ok("cond ? () : b => b");
+    let ExprKind::Ternary {
+        then_expr: then_u,
+        else_expr: else_u,
+        ..
+    } = ternary_unit.kind
+    else {
+        panic!("expected Ternary for `cond ? () : b => b`");
+    };
+    assert!(matches!(then_u.kind, ExprKind::Literal(_)));
+    assert!(matches!(else_u.kind, ExprKind::ArrowFunction(_)));
+
+    let ternary_paren = parse_expr_ok("cond ? (a) : b => b");
+    let ExprKind::Ternary {
+        then_expr: then_p,
+        else_expr: else_p,
+        ..
+    } = ternary_paren.kind
+    else {
+        panic!("expected Ternary for `cond ? (a) : b => b`");
+    };
+    assert!(matches!(then_p.kind, ExprKind::Parenthesized(_)));
+    assert!(matches!(else_p.kind, ExprKind::ArrowFunction(_)));
+
+    // Explicitly parenthesized typed 0-arg arrow inside ternary still works.
+    let ternary_grouped = parse_expr_ok("cond ? ((): int => 1) : () => 2");
+    let ExprKind::Ternary {
+        then_expr: then_g,
+        else_expr: else_g,
+        ..
+    } = ternary_grouped.kind
+    else {
+        panic!("expected Ternary for parenthesized arrow inside ternary");
+    };
+    assert!(matches!(then_g.kind, ExprKind::Parenthesized(_)));
+    assert!(matches!(else_g.kind, ExprKind::ArrowFunction(_)));
+
+    // 2. Invalid return type on `(): <bad> => 1` reports the type error directly (not swallowed).
+    let (_, ret_errs) = parse_expr("(): => 1");
+    assert!(!ret_errs.is_empty());
+    assert!(ret_errs[0].message().contains("found '=>'"));
+
+    // 3. Floating-point literal overflow (`1e9999` -> non-finite f64) is rejected.
+    let (_, float_errs) = parse_expr("1e9999");
+    assert_eq!(float_errs.len(), 1);
+    assert!(matches!(
+        float_errs[0].kind(),
+        ParseErrorKind::InvalidLiteral(_)
+    ));
+
+    // 4. Underscore-free numbers, unescaped strings, and string-keyed objects parse identically.
+    let obj_lit = parse_expr_ok(r#"{ "host": "localhost", port: 8080, pi: 3.14 }"#);
+    assert!(matches!(obj_lit.kind, ExprKind::Object(ref m) if m.len() == 3));
+
+    // 5. `Checkpoint` rolls back `next_node_id`, preventing sparse gaps on speculative failure.
+    let mut p_id = Parser::new("let x = 1");
+    let _ = p_id.alloc_id();
+    let cp = p_id.checkpoint();
+    assert_eq!(p_id.alloc_id(), kyanos_ast::NodeId::new(1));
+    assert_eq!(p_id.alloc_id(), kyanos_ast::NodeId::new(2));
+    p_id.restore(cp);
+    assert_eq!(p_id.alloc_id(), kyanos_ast::NodeId::new(1));
+
+    // `NodeId::DUMMY` exhaustion records a single diagnostic rather than silently reusing DUMMY.
+    let mut p_max = Parser::with_offset("a", 0, u32::MAX - 1);
+    assert_eq!(p_max.alloc_id(), kyanos_ast::NodeId::new(u32::MAX - 1));
+    assert_eq!(p_max.alloc_id(), kyanos_ast::NodeId::DUMMY);
+    assert_eq!(p_max.alloc_id(), kyanos_ast::NodeId::DUMMY);
+    assert_eq!(p_max.errors().len(), 1);
+
+    // 6. Error messages render readable token symbols/labels instead of raw Rust enum names.
+    let (_, diag_errs) = parse_expr("let");
+    assert!(!diag_errs.is_empty());
+    assert!(
+        diag_errs[0].message().contains("found 'let'"),
+        "expected readable token display, got: {}",
+        diag_errs[0].message()
+    );
+
+    let mut brace_parser = Parser::new("function f {");
+    let brace_err = brace_parser.parse_decl().unwrap_err();
+    assert!(
+        brace_err.message().contains("found '{'"),
+        "expected readable brace token display, got: {}",
+        brace_err.message()
+    );
+}
+
+#[test]
+fn test_member_arm_recovery_and_uniform_stmt_spans() {
+    // 1. `enum` recovers per variant and preserves valid variants after errors.
+    let enum_out = parse("enum Event {\n Click(123),\n Resize = ,\n Close\n}");
+    assert_eq!(
+        enum_out.errors.len(),
+        2,
+        "expected 2 errors inside broken enum, got: {:?}",
+        enum_out.errors
+    );
+    let SourceElement::Decl(enum_decl) = &enum_out.program.elements[0] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Enum(ed) = &enum_decl.kind else {
+        panic!("expected EnumDecl");
+    };
+    assert_eq!(ed.variants.len(), 1);
+    assert!(matches!(&ed.variants[0], EnumVariant::Value { name, .. } if name.as_str() == "Close"));
+
+    // 2. `switch` expression recovers per arm (`case` / `default`) and keeps valid arms.
+    let (sw_expr, sw_errs) =
+        parse_expr("switch (code) {\n case 1 => ,\n case 2 => \"ok\",\n default => \"other\"\n}");
+    assert_eq!(sw_errs.len(), 1, "expected 1 error: {:?}", sw_errs);
+    let ExprKind::Switch { arms, .. } = sw_expr.kind else {
+        panic!("expected Switch expr");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(matches!(arms[1], SwitchExprArm::Default { .. }));
+
+    // 3. Anonymous struct type uses `TypeKind::Error` on invalid field type and skips broken members.
+    let mut ty_parser = Parser::new("{\n port: ,\n 123: int,\n host: string\n}");
+    let anon_ty = ty_parser
+        .parse_type()
+        .expect("anonymous struct should recover per member");
+    assert_eq!(
+        ty_parser.errors().len(),
+        2,
+        "expected 2 errors inside anonymous struct, got: {:?}",
+        ty_parser.errors()
+    );
+    let TypeKind::AnonymousStruct(members) = anon_ty.kind else {
+        panic!("expected AnonymousStruct");
+    };
+    assert_eq!(members.len(), 2);
+    let AnonymousStructMember::Field(port_f) = &members[0] else {
+        panic!("expected port field");
+    };
+    assert_eq!(port_f.name.as_str(), "port");
+    assert_eq!(port_f.ty.kind, TypeKind::Error);
+    let AnonymousStructMember::Field(host_f) = &members[1] else {
+        panic!("expected host field");
+    };
+    assert_eq!(host_f.name.as_str(), "host");
+
+    // 4. Statement spans consistently exclude `;` and EOS recovery skip tokens (Option A).
+    let semi_src = "{\n let x = 10;\n return 42;\n foo(x);\n}";
+    let semi_block = parse_block_ok(semi_src);
+    assert_eq!(
+        &semi_src[semi_block.statements[0].span.start..semi_block.statements[0].span.end],
+        "let x = 10"
+    );
+    assert_eq!(
+        &semi_src[semi_block.statements[1].span.start..semi_block.statements[1].span.end],
+        "return 42"
+    );
+    assert_eq!(
+        &semi_src[semi_block.statements[2].span.start..semi_block.statements[2].span.end],
+        "foo(x)"
+    );
+
+    let recover_src = "let x = 10 bad garbage\nlet y = 20";
+    let recover_out = parse(recover_src);
+    assert_eq!(recover_out.errors.len(), 1);
+    assert_eq!(recover_out.program.elements.len(), 2);
+    let span0 = recover_out.program.elements[0].span();
+    assert_eq!(
+        &recover_src[span0.start..span0.end],
+        "let x = 10",
+        "statement span must not swallow EOS-recovery tokens"
+    );
 }

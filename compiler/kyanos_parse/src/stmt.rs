@@ -142,8 +142,8 @@ impl<'a> Parser<'a> {
         let mod_tok = self.current();
         let modifier = self.parse_var_modifier_token();
         let declarations = self.parse_variable_decl_list(modifier == VarModifier::Const)?;
-        self.expect_eos_or_recover();
         let span = self.span_from(mod_tok.span);
+        self.expect_eos_or_recover();
         Ok(VariableStmt::new(modifier, declarations, span))
     }
 
@@ -202,8 +202,8 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Assign, "'='")?;
         let init = self.parse_expr()?;
-        self.expect_eos_or_recover();
         let span = self.span_from(using_tok.span);
+        self.expect_eos_or_recover();
         Ok(UsingStmt::new(name, ty, init, span))
     }
 
@@ -259,9 +259,9 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::OpenParen, "'('")?;
         let condition = self.with_grouping(|p| p.parse_expr())?;
         self.expect(TokenKind::CloseParen, "')'")?;
+        let span = self.span_from(do_tok.span);
         self.expect_eos_or_recover();
 
-        let span = self.span_from(do_tok.span);
         let id = self.alloc_id();
         Ok(Stmt::do_while(body, condition, span).with_id(id))
     }
@@ -507,8 +507,8 @@ impl<'a> Parser<'a> {
         } else {
             Some(self.parse_expr()?)
         };
-        self.expect_eos_or_recover();
         let span = self.span_from(ret_tok.span);
+        self.expect_eos_or_recover();
         let id = self.alloc_id();
         Ok(Stmt::return_stmt(value, span).with_id(id))
     }
@@ -516,8 +516,8 @@ impl<'a> Parser<'a> {
     fn parse_break_stmt(&mut self) -> ParseResult<Stmt> {
         let brk_tok = self.expect(TokenKind::Break, "'break'")?;
         let label = self.parse_optional_same_line_ident();
-        self.expect_eos_or_recover();
         let span = self.span_from(brk_tok.span);
+        self.expect_eos_or_recover();
         let id = self.alloc_id();
         Ok(Stmt::break_stmt(label, span).with_id(id))
     }
@@ -525,8 +525,8 @@ impl<'a> Parser<'a> {
     fn parse_continue_stmt(&mut self) -> ParseResult<Stmt> {
         let cont_tok = self.expect(TokenKind::Continue, "'continue'")?;
         let label = self.parse_optional_same_line_ident();
-        self.expect_eos_or_recover();
         let span = self.span_from(cont_tok.span);
+        self.expect_eos_or_recover();
         let id = self.alloc_id();
         Ok(Stmt::continue_stmt(label, span).with_id(id))
     }
@@ -559,8 +559,8 @@ impl<'a> Parser<'a> {
 
     fn parse_debugger_stmt(&mut self) -> ParseResult<Stmt> {
         let dbg_tok = self.expect(TokenKind::Debugger, "'debugger'")?;
-        self.expect_eos_or_recover();
         let span = self.span_from(dbg_tok.span);
+        self.expect_eos_or_recover();
         let id = self.alloc_id();
         Ok(Stmt::debugger(span).with_id(id))
     }

@@ -12,8 +12,8 @@
 use kyanos_ast::{
     precedence, Argument, ArrayElement, ArrowBody, AssignOp, BinaryOp, Expr, ExprKind, Ident,
     Literal, MemberProperty, ObjectMember, ObjectMethod, Parameter, ParameterList, PostfixUnaryOp,
-    PrefixUnaryOp, PrivateIdent, PropertyName, ReturnType, SizeofTarget, Span, StringLiteral,
-    StructFieldInit, SwitchExprArm, TypeArguments, TypeName, TypeParameters,
+    PrefixUnaryOp, PrivateIdent, PropertyName, ReturnType, SizeofTarget, Span, StructFieldInit,
+    SwitchExprArm, TypeArguments, TypeName, TypeParameters,
 };
 use kyanos_lexer::TokenKind;
 
@@ -549,19 +549,27 @@ impl<'a> Parser<'a> {
             self.bump(); // ')'
             let paren_span = self.span_from(open.span);
 
-            let cp = self.checkpoint();
-            let return_type = if self.eat(TokenKind::Colon).is_some() {
-                self.parse_return_type().ok()
-            } else {
-                None
-            };
+            if self.pending_ternary_then == 0 && self.eat(TokenKind::Colon).is_some() {
+                let return_type = self.parse_return_type()?;
+                if !self.at(TokenKind::Arrow) {
+                    let tok = self.current();
+                    return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
+                }
+                let params = ParameterList::empty(paren_span);
+                return self.finish_arrow_function(
+                    open.span,
+                    false,
+                    None,
+                    params,
+                    Some(return_type),
+                );
+            }
 
             if self.at(TokenKind::Arrow) {
                 let params = ParameterList::empty(paren_span);
-                return self.finish_arrow_function(open.span, false, None, params, return_type);
+                return self.finish_arrow_function(open.span, false, None, params, None);
             }
 
-            self.restore(cp);
             let id = self.alloc_id();
             return Ok(Expr::literal(Literal::unit(paren_span)).with_id(id));
         }
@@ -586,7 +594,11 @@ impl<'a> Parser<'a> {
         match self.parse_parameter_list() {
             Ok(params) => {
                 let definitely_params = params_require_arrow(&params);
-                let return_type = if self.eat(TokenKind::Colon).is_some() {
+                // Inside an open ternary `then` branch (or `when` guard), do not let `:` on a
+                // single identifier/destructured paren be consumed as a return type annotation,
+                // otherwise `cond ? (a) : b => b` steals the ternary's `:`.
+                let allow_return_type = definitely_params || self.pending_ternary_then == 0;
+                let return_type = if allow_return_type && self.eat(TokenKind::Colon).is_some() {
                     match self.parse_return_type() {
                         Ok(rt) => Some(rt),
                         Err(err) => {
@@ -805,17 +817,12 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::StringLiteral => {
-                self.bump();
-                let raw = self.slice(tok.span);
-                let lit = self.parse_literal_token(tok)?;
-                let value_str = match lit.kind {
-                    kyanos_ast::LiteralKind::String(s) => s.value,
-                    _ => String::new(),
-                };
-                let key = PropertyName::String(StringLiteral::new(value_str, raw, tok.span));
+                let str_lit = self.parse_string_literal_node()?;
+                let start = str_lit.span;
+                let key = PropertyName::String(str_lit);
                 self.expect(TokenKind::Colon, "':'")?;
                 let value = self.parse_expr()?;
-                let span = self.span_from(tok.span);
+                let span = self.span_from(start);
                 Ok(ObjectMember::Property {
                     name: key,
                     value,
@@ -930,39 +937,28 @@ impl<'a> Parser<'a> {
         let arms = self.with_isolated_ternary_scope(|p| {
             let mut arms = Vec::new();
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
-                let arm_start = p.current_span();
-                if p.eat(TokenKind::Case).is_some() {
-                    let pattern = p.parse_pattern()?;
-                    let guard = if p.eat(TokenKind::When).is_some() {
-                        Some(Box::new(p.parse_expr()?))
-                    } else {
-                        None
-                    };
-                    p.expect(TokenKind::Arrow, "'=>'")?;
-                    let body = Box::new(p.parse_expr()?);
-                    let span = p.span_from(arm_start);
-                    arms.push(SwitchExprArm::Case {
-                        pattern,
-                        guard,
-                        body,
-                        span,
-                    });
-                } else if p.eat(TokenKind::Default).is_some() {
-                    p.expect(TokenKind::Arrow, "'=>'")?;
-                    let body = Box::new(p.parse_expr()?);
-                    let span = p.span_from(arm_start);
-                    arms.push(SwitchExprArm::Default { body, span });
-                } else {
-                    let tok = p.current();
-                    return Err(ParseError::unexpected(
-                        "'case' or 'default'",
-                        tok.kind,
-                        tok.span,
-                    ));
-                }
-
-                if p.eat(TokenKind::Comma).is_none() {
-                    break;
+                let start_cursor = p.checkpoint().cursor;
+                match p.parse_switch_expr_arm() {
+                    Ok(arm) => {
+                        arms.push(arm);
+                        if p.eat(TokenKind::Comma).is_none() {
+                            if !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                                let tok = p.current();
+                                p.report_error(ParseError::unexpected(
+                                    "',' or '}'",
+                                    tok.kind,
+                                    tok.span,
+                                ));
+                                p.synchronize_braced_element(true, false);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        p.report_error(err);
+                        p.synchronize_braced_element_from(start_cursor, true, false);
+                    }
                 }
             }
             Ok::<_, ParseError>(arms)
@@ -979,6 +975,39 @@ impl<'a> Parser<'a> {
             span,
         )
         .with_id(id))
+    }
+
+    fn parse_switch_expr_arm(&mut self) -> ParseResult<SwitchExprArm> {
+        let arm_start = self.current_span();
+        if self.eat(TokenKind::Case).is_some() {
+            let pattern = self.parse_pattern()?;
+            let guard = if self.eat(TokenKind::When).is_some() {
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
+            self.expect(TokenKind::Arrow, "'=>'")?;
+            let body = Box::new(self.parse_expr()?);
+            let span = self.span_from(arm_start);
+            Ok(SwitchExprArm::Case {
+                pattern,
+                guard,
+                body,
+                span,
+            })
+        } else if self.eat(TokenKind::Default).is_some() {
+            self.expect(TokenKind::Arrow, "'=>'")?;
+            let body = Box::new(self.parse_expr()?);
+            let span = self.span_from(arm_start);
+            Ok(SwitchExprArm::Default { body, span })
+        } else {
+            let tok = self.current();
+            Err(ParseError::unexpected(
+                "'case' or 'default'",
+                tok.kind,
+                tok.span,
+            ))
+        }
     }
 
     fn parse_unsafe_expr(&mut self) -> ParseResult<Expr> {

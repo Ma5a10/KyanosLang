@@ -181,8 +181,8 @@ impl<'a> Parser<'a> {
 
         if self.at(TokenKind::StringLiteral) {
             let source = self.parse_string_literal_node()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(import_tok.span);
+            self.expect_eos_or_recover();
             return Ok(ImportStmt::side_effect(source, span));
         }
 
@@ -212,8 +212,8 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::From, "'from'")?;
         let source = self.parse_string_literal_node()?;
-        self.expect_eos_or_recover();
         let span = self.span_from(import_tok.span);
+        self.expect_eos_or_recover();
         Ok(ImportStmt::new(Some(clause), source, span))
     }
 
@@ -254,8 +254,8 @@ impl<'a> Parser<'a> {
                 ));
             }
             let expr = self.parse_expr()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             return Ok(ExportStmt::default_expr(expr, span));
         }
 
@@ -272,8 +272,8 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             return Ok(ExportStmt::named(specifiers, source, span));
         }
 
@@ -393,14 +393,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let body = if self.at(TokenKind::OpenBrace) {
-            Some(self.parse_block()?)
+        let (body, span) = if self.at(TokenKind::OpenBrace) {
+            let block = self.parse_block()?;
+            let span = self.span_from(start);
+            (Some(block), span)
         } else {
+            let span = self.span_from(start);
             self.expect_eos_or_recover();
-            None
+            (None, span)
         };
 
-        let span = self.span_from(start);
         let id = self.alloc_id();
         Ok(Decl::function(FunctionDecl::new(
             attributes,
@@ -512,8 +514,8 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        self.expect_eos_or_recover();
         let span = self.span_from(start);
+        self.expect_eos_or_recover();
         Ok(StructMember::Field(StructField {
             accessibility,
             is_static,
@@ -701,8 +703,8 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        self.expect_eos_or_recover();
         let span = self.span_from(start);
+        self.expect_eos_or_recover();
         Ok(ClassMember::Field(ClassField {
             accessibility,
             is_static,
@@ -846,8 +848,8 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::CloseBracket, "']'")?;
             self.expect(TokenKind::Colon, "':'")?;
             let value_type = self.parse_type()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             return Ok(InterfaceMember::Index(IndexSignature {
                 name,
                 key_type,
@@ -870,8 +872,8 @@ impl<'a> Parser<'a> {
             let params = self.parse_parameter_list()?;
             self.expect(TokenKind::Colon, "':'")?;
             let return_type = self.parse_return_type()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             Ok(InterfaceMember::Method(InterfaceMethod {
                 name,
                 is_optional,
@@ -883,8 +885,8 @@ impl<'a> Parser<'a> {
         } else {
             self.expect(TokenKind::Colon, "':'")?;
             let ty = self.parse_type()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             Ok(InterfaceMember::Property(InterfaceProperty {
                 is_readonly,
                 name,
@@ -919,35 +921,28 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::OpenBrace, "'{'")?;
         let mut variants = Vec::new();
         while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
-            let v_tok = self.expect(TokenKind::Identifier, "enum variant name")?;
-            let v_name = Ident::new(self.slice(v_tok.span), v_tok.span);
-
-            let variant = if self.eat(TokenKind::OpenParen).is_some() {
-                let payload = self.parse_enum_payload_list()?;
-                self.expect(TokenKind::CloseParen, "')'")?;
-                let v_span = self.span_from(v_tok.span);
-                EnumVariant::Tuple {
-                    name: v_name,
-                    payload,
-                    span: v_span,
+            let start_cursor = self.checkpoint().cursor;
+            match self.parse_enum_variant() {
+                Ok(variant) => {
+                    variants.push(variant);
+                    if self.eat(TokenKind::Comma).is_none() {
+                        if !self.at(TokenKind::CloseBrace) && !self.is_eof() {
+                            let tok = self.current();
+                            self.report_error(ParseError::unexpected(
+                                "',' or '}'",
+                                tok.kind,
+                                tok.span,
+                            ));
+                            self.synchronize_braced_element(false, false);
+                        } else {
+                            break;
+                        }
+                    }
                 }
-            } else {
-                let value = if self.eat(TokenKind::Assign).is_some() {
-                    Some(self.parse_expr()?)
-                } else {
-                    None
-                };
-                let v_span = self.span_from(v_tok.span);
-                EnumVariant::Value {
-                    name: v_name,
-                    value,
-                    span: v_span,
+                Err(err) => {
+                    self.report_error(err);
+                    self.synchronize_braced_element_from(start_cursor, false, false);
                 }
-            };
-            variants.push(variant);
-
-            if self.eat(TokenKind::Comma).is_none() {
-                break;
             }
         }
         self.expect(TokenKind::CloseBrace, "'}'")?;
@@ -963,6 +958,34 @@ impl<'a> Parser<'a> {
             span,
         ))
         .with_id(id))
+    }
+
+    fn parse_enum_variant(&mut self) -> ParseResult<EnumVariant> {
+        let v_tok = self.expect(TokenKind::Identifier, "enum variant name")?;
+        let v_name = Ident::new(self.slice(v_tok.span), v_tok.span);
+
+        if self.eat(TokenKind::OpenParen).is_some() {
+            let payload = self.parse_enum_payload_list()?;
+            self.expect(TokenKind::CloseParen, "')'")?;
+            let v_span = self.span_from(v_tok.span);
+            Ok(EnumVariant::Tuple {
+                name: v_name,
+                payload,
+                span: v_span,
+            })
+        } else {
+            let value = if self.eat(TokenKind::Assign).is_some() {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            let v_span = self.span_from(v_tok.span);
+            Ok(EnumVariant::Value {
+                name: v_name,
+                value,
+                span: v_span,
+            })
+        }
     }
 
     fn parse_enum_payload_list(&mut self) -> ParseResult<Vec<EnumPayloadField>> {
@@ -1005,8 +1028,8 @@ impl<'a> Parser<'a> {
         };
         self.expect(TokenKind::Assign, "'='")?;
         let ty = self.parse_type()?;
-        self.expect_eos_or_recover();
         let span = self.span_from(start);
+        self.expect_eos_or_recover();
         let id = self.alloc_id();
         Ok(Decl::type_alias(TypeAliasDecl::new(
             attributes,
@@ -1064,14 +1087,16 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let body = if self.at(TokenKind::OpenBrace) {
-            Some(self.parse_block()?)
+        let (body, span) = if self.at(TokenKind::OpenBrace) {
+            let block = self.parse_block()?;
+            let span = self.span_from(start);
+            (Some(block), span)
         } else {
+            let span = self.span_from(start);
             self.expect_eos_or_recover();
-            None
+            (None, span)
         };
 
-        let span = self.span_from(start);
         let id = self.alloc_id();
         Ok(Decl::single_extern(SingleExternDecl::new(
             attributes,
@@ -1108,8 +1133,8 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             return Ok(ExternMember::Function(ExternFunctionDecl {
                 attributes,
                 name,
@@ -1126,8 +1151,8 @@ impl<'a> Parser<'a> {
             let name = Ident::new(self.slice(name_tok.span), name_tok.span);
             self.expect(TokenKind::Colon, "':'")?;
             let ty = self.parse_type()?;
-            self.expect_eos_or_recover();
             let span = self.span_from(start);
+            self.expect_eos_or_recover();
             return Ok(ExternMember::Variable(ExternVariableDecl {
                 attributes,
                 is_const,
@@ -1286,7 +1311,7 @@ impl<'a> Parser<'a> {
         Ok(refs)
     }
 
-    fn parse_string_literal_node(&mut self) -> ParseResult<StringLiteral> {
+    pub(crate) fn parse_string_literal_node(&mut self) -> ParseResult<StringLiteral> {
         let tok = self.expect(TokenKind::StringLiteral, "string literal")?;
         let lit = self.parse_literal_token(tok)?;
         match lit.kind {

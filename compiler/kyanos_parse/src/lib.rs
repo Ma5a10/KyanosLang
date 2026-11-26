@@ -129,6 +129,8 @@ pub struct Parser<'a> {
     stream: TokenStream<'a>,
     errors: Vec<ParseError>,
     next_node_id: u32,
+    /// Prevents emitting duplicate diagnostics once `next_node_id` reaches `NodeId::DUMMY`.
+    node_id_exhausted: bool,
     /// Parser configuration options including recursion limits.
     options: ParseOptions,
     /// Memoization caches preserved across speculative `restore` calls.
@@ -188,6 +190,7 @@ impl<'a> Parser<'a> {
             stream,
             errors,
             next_node_id,
+            node_id_exhausted: false,
             options,
             memo: BacktrackMemo::default(),
             grouping_depth: 0,
@@ -233,8 +236,18 @@ impl<'a> Parser<'a> {
     /// Allocates a fresh sequential [`NodeId`] for an AST node.
     #[inline]
     pub fn alloc_id(&mut self) -> NodeId {
+        if self.next_node_id == u32::MAX {
+            if !self.node_id_exhausted {
+                self.node_id_exhausted = true;
+                self.report_error(ParseError::syntax(
+                    "AST node ID space exhausted",
+                    self.current_span(),
+                ));
+            }
+            return NodeId::DUMMY;
+        }
         let id = NodeId::new(self.next_node_id);
-        self.next_node_id = self.next_node_id.saturating_add(1);
+        self.next_node_id += 1;
         id
     }
 
@@ -372,15 +385,16 @@ impl<'a> Parser<'a> {
     #[inline]
     pub fn checkpoint(&self) -> Checkpoint {
         self.stream
-            .save_position(self.errors.len(), self.grouping_depth)
+            .save_position(self.errors.len(), self.grouping_depth, self.next_node_id)
     }
 
-    /// Rewinds the parser cursor and truncates diagnostics back to `cp`.
+    /// Rewinds the parser cursor, AST node ID counter, and diagnostics back to `cp`.
     #[inline]
     pub fn restore(&mut self, cp: Checkpoint) {
         self.stream.restore_position(&cp);
         self.errors.truncate(cp.error_len);
         self.grouping_depth = cp.grouping_depth;
+        self.next_node_id = cp.next_node_id;
     }
 
     /// Returns a memoization key `(cursor, in_grouping)` when no split virtual token is active.
@@ -554,6 +568,74 @@ impl<'a> Parser<'a> {
                 return;
             }
             self.bump();
+        }
+    }
+
+    /// Synchronizes inside a `{ ... }` member/arm list from `start_cursor`, guaranteeing at
+    /// least one token of forward progress before skipping to the next delimiter/boundary.
+    pub(crate) fn synchronize_braced_element_from(
+        &mut self,
+        start_cursor: usize,
+        stop_at_switch_arm: bool,
+        stop_at_semicolon_or_newline: bool,
+    ) {
+        if self.checkpoint().cursor == start_cursor
+            && !self.at(TokenKind::CloseBrace)
+            && !self.is_eof()
+        {
+            self.bump();
+        }
+        self.synchronize_braced_element(stop_at_switch_arm, stop_at_semicolon_or_newline);
+    }
+
+    /// Synchronizes inside a `{ ... }` member/arm list after an element parse error.
+    ///
+    /// Tracks nested `(...)`, `[...]`, and `{...}` depths so inner delimiters do not trigger
+    /// premature synchronization. Consumes `,` (and `;` when `stop_at_semicolon_or_newline` is
+    /// `true`) at depth 0, or stops before `}` / `EOF` (and depth-0 `case`/`default` or newline
+    /// boundaries when requested).
+    pub(crate) fn synchronize_braced_element(
+        &mut self,
+        stop_at_switch_arm: bool,
+        stop_at_semicolon_or_newline: bool,
+    ) {
+        let mut depth = 0usize;
+        while !self.is_eof() {
+            let tok = self.current();
+            match tok.kind {
+                TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::OpenBrace => {
+                    depth += 1;
+                    self.bump();
+                }
+                TokenKind::CloseParen | TokenKind::CloseBracket => {
+                    depth = depth.saturating_sub(1);
+                    self.bump();
+                }
+                TokenKind::CloseBrace => {
+                    if depth == 0 {
+                        return;
+                    }
+                    depth -= 1;
+                    self.bump();
+                }
+                TokenKind::Comma if depth == 0 => {
+                    self.bump();
+                    return;
+                }
+                TokenKind::Semicolon if depth == 0 && stop_at_semicolon_or_newline => {
+                    self.bump();
+                    return;
+                }
+                TokenKind::Case | TokenKind::Default if depth == 0 && stop_at_switch_arm => {
+                    return;
+                }
+                _ if depth == 0 && stop_at_semicolon_or_newline && tok.has_leading_newline => {
+                    return;
+                }
+                _ => {
+                    self.bump();
+                }
+            }
         }
     }
 }

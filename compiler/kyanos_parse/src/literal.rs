@@ -6,6 +6,8 @@
 
 //! Literal token decoding and template string interpolation parsing.
 
+use std::borrow::Cow;
+
 use kyanos_ast::{Expr, ExprKind, Literal, Radix, Span, TemplateStringPart};
 use kyanos_lexer::{Token, TokenKind};
 
@@ -190,9 +192,19 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Strips numeric `_` separators without allocating when none are present.
+#[inline]
+fn strip_numeric_underscores(raw: &str) -> Cow<'_, str> {
+    if raw.as_bytes().contains(&b'_') {
+        Cow::Owned(raw.chars().filter(|&c| c != '_').collect())
+    } else {
+        Cow::Borrowed(raw)
+    }
+}
+
 /// Decodes a decimal, hexadecimal, octal, or binary integer literal into `u64`.
 fn decode_integer_literal(raw: &str, span: Span) -> ParseResult<Literal> {
-    let clean: String = raw.chars().filter(|&c| c != '_').collect();
+    let clean = strip_numeric_underscores(raw);
     let (radix, digits) = if let Some(rest) = clean
         .strip_prefix("0x")
         .or_else(|| clean.strip_prefix("0X"))
@@ -209,7 +221,7 @@ fn decode_integer_literal(raw: &str, span: Span) -> ParseResult<Literal> {
     {
         (Radix::Binary, rest)
     } else {
-        (Radix::Decimal, clean.as_str())
+        (Radix::Decimal, clean.as_ref())
     };
 
     let value = u64::from_str_radix(digits, radix.as_u32()).map_err(|err| {
@@ -224,9 +236,9 @@ fn decode_integer_literal(raw: &str, span: Span) -> ParseResult<Literal> {
     Ok(Literal::integer(raw, value, radix, span))
 }
 
-/// Decodes a floating-point literal into `f64`.
+/// Decodes a floating-point literal into `f64`, rejecting values that overflow to non-finite `f64`.
 fn decode_float_literal(raw: &str, span: Span) -> ParseResult<Literal> {
-    let clean: String = raw.chars().filter(|&c| c != '_').collect();
+    let clean = strip_numeric_underscores(raw);
     let value = clean.parse::<f64>().map_err(|err| {
         ParseError::new(
             ParseErrorKind::InvalidLiteral(err.to_string()),
@@ -234,6 +246,17 @@ fn decode_float_literal(raw: &str, span: Span) -> ParseResult<Literal> {
             format!("Invalid float literal '{}': {}", raw, err),
         )
     })?;
+
+    if !value.is_finite() {
+        return Err(ParseError::new(
+            ParseErrorKind::InvalidLiteral("Floating-point literal overflow".to_string()),
+            span,
+            format!(
+                "Invalid float literal '{}': value overflows 64-bit floating-point range",
+                raw
+            ),
+        ));
+    }
 
     Ok(Literal::float(raw, value, span))
 }
@@ -258,6 +281,9 @@ fn strip_delimiters(raw: &str, prefix: usize, suffix: usize, span: Span) -> Pars
 
 /// Unescapes the body of a string or C-string literal.
 fn unescape_string(inner: &str, span: Span) -> ParseResult<String> {
+    if !inner.as_bytes().contains(&b'\\') {
+        return Ok(inner.to_owned());
+    }
     let mut out = String::with_capacity(inner.len());
     let mut idx = 0usize;
     while let Some(ch) = inner.get(idx..).and_then(|s| s.chars().next()) {

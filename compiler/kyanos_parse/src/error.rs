@@ -118,7 +118,7 @@ impl ParseError {
                     found,
                 },
                 span,
-                format!("Expected {}, found {:?}", expected_str, found),
+                format!("Expected {}, found {}", expected_str, token_kind_display(found)),
             )
         }
     }
@@ -128,7 +128,10 @@ impl ParseError {
         Self::new(
             ParseErrorKind::ExpectedEos { found },
             span,
-            format!("Expected ';' or newline after statement, found {:?}", found),
+            format!(
+                "Expected ';' or newline after statement, found {}",
+                token_kind_display(found)
+            ),
         )
         .with_hint(
             "Separate statements on the same line with ';', or place them on separate lines.",
@@ -173,3 +176,173 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+/// Returns a user-facing label for `kind` in parser error messages.
+pub fn token_kind_display(kind: TokenKind) -> &'static str {
+    match kind {
+        TokenKind::Whitespace => "whitespace",
+        TokenKind::LineTerminator => "newline",
+        TokenKind::SingleLineComment | TokenKind::MultiLineComment => "comment",
+
+        TokenKind::Let => "'let'",
+        TokenKind::Const => "'const'",
+        TokenKind::Function => "'function'",
+        TokenKind::Class => "'class'",
+        TokenKind::Struct => "'struct'",
+        TokenKind::Interface => "'interface'",
+        TokenKind::Enum => "'enum'",
+        TokenKind::Type => "'type'",
+        TokenKind::Constructor => "'constructor'",
+
+        TokenKind::If => "'if'",
+        TokenKind::Else => "'else'",
+        TokenKind::Do => "'do'",
+        TokenKind::While => "'while'",
+        TokenKind::For => "'for'",
+        TokenKind::In => "'in'",
+        TokenKind::Of => "'of'",
+        TokenKind::Return => "'return'",
+        TokenKind::Break => "'break'",
+        TokenKind::Continue => "'continue'",
+        TokenKind::Switch => "'switch'",
+        TokenKind::Case => "'case'",
+        TokenKind::Default => "'default'",
+        TokenKind::When => "'when'",
+        TokenKind::Debugger => "'debugger'",
+
+        TokenKind::Try => "'try'",
+        TokenKind::Defer => "'defer'",
+        TokenKind::Using => "'using'",
+
+        TokenKind::Public => "'public'",
+        TokenKind::Protected => "'protected'",
+        TokenKind::Private => "'private'",
+        TokenKind::Static => "'static'",
+        TokenKind::Readonly => "'readonly'",
+
+        TokenKind::New => "'new'",
+        TokenKind::This => "'this'",
+        TokenKind::Super => "'super'",
+        TokenKind::Extends => "'extends'",
+        TokenKind::Implements => "'implements'",
+        TokenKind::As => "'as'",
+
+        TokenKind::Import => "'import'",
+        TokenKind::Export => "'export'",
+        TokenKind::From => "'from'",
+
+        TokenKind::Async => "'async'",
+        TokenKind::Await => "'await'",
+        TokenKind::Yield => "'yield'",
+        TokenKind::YieldStar => "'yield*'",
+        TokenKind::Spawn => "'spawn'",
+
+        TokenKind::Unsafe => "'unsafe'",
+        TokenKind::Extern => "'extern'",
+        TokenKind::Delete => "'delete'",
+
+        TokenKind::True => "'true'",
+        TokenKind::False => "'false'",
+        TokenKind::Null => "'null'",
+
+        TokenKind::TypeByte => "'byte'",
+        TokenKind::TypeShort => "'short'",
+        TokenKind::TypeInt => "'int'",
+        TokenKind::TypeLong => "'long'",
+        TokenKind::TypeSizeT => "'size_t'",
+        TokenKind::TypeUbyte => "'ubyte'",
+        TokenKind::TypeUshort => "'ushort'",
+        TokenKind::TypeUint => "'uint'",
+        TokenKind::TypeUlong => "'ulong'",
+        TokenKind::TypeFloat => "'float'",
+        TokenKind::TypeDouble => "'double'",
+        TokenKind::TypeBool => "'bool'",
+        TokenKind::TypeChar => "'char'",
+        TokenKind::TypeString => "'string'",
+        TokenKind::TypeVoid => "'void'",
+        TokenKind::TypeNever => "'never'",
+        TokenKind::TypeRawptr => "'rawptr'",
+
+        TokenKind::OpenBrace => "'{'",
+        TokenKind::CloseBrace => "'}'",
+        TokenKind::OpenParen => "'('",
+        TokenKind::CloseParen => "')'",
+        TokenKind::OpenBracket => "'['",
+        TokenKind::CloseBracket => "']'",
+        TokenKind::Dot => "'.'",
+        TokenKind::Ellipsis => "'...'",
+        TokenKind::Semicolon => "';'",
+        TokenKind::Comma => "','",
+        TokenKind::Colon => "':'",
+        TokenKind::Question => "'?'",
+        TokenKind::OptionalChain => "'?.'",
+        TokenKind::NullCoalescing => "'??'",
+        TokenKind::Arrow => "'=>'",
+        TokenKind::HashBracket => "'#['",
+        TokenKind::Underscore => "'_'",
+
+        TokenKind::Plus => "'+'",
+        TokenKind::Minus => "'-'",
+        TokenKind::Star => "'*'",
+        TokenKind::Slash => "'/'",
+        TokenKind::Percent => "'%'",
+        TokenKind::Power => "'**'",
+        TokenKind::PlusPlus => "'++'",
+        TokenKind::MinusMinus => "'--'",
+        TokenKind::And => "'&'",
+        TokenKind::Bar => "'|'",
+        TokenKind::Caret => "'^'",
+        TokenKind::Tilde => "'~'",
+        TokenKind::ShiftLeft => "'<<'",
+        TokenKind::ShiftRight => "'>>'",
+        TokenKind::UnsignedShiftRight => "'>>>'",
+
+        TokenKind::Bang => "'!'",
+        TokenKind::AndAnd => "'&&'",
+        TokenKind::BarBar => "'||'",
+        TokenKind::Equals => "'=='",
+        TokenKind::NotEquals => "'!='",
+        TokenKind::LessThan => "'<'",
+        TokenKind::LessThanEquals => "'<='",
+        TokenKind::GreaterThan => "'>'",
+        TokenKind::GreaterThanEquals => "'>='",
+
+        TokenKind::Assign => "'='",
+        TokenKind::PlusAssign => "'+='",
+        TokenKind::MinusAssign => "'-='",
+        TokenKind::StarAssign => "'*='",
+        TokenKind::SlashAssign => "'/='",
+        TokenKind::PercentAssign => "'%='",
+        TokenKind::PowerAssign => "'**='",
+        TokenKind::ShiftLeftAssign => "'<<='",
+        TokenKind::ShiftRightAssign => "'>>='",
+        TokenKind::UnsignedShiftRightAssign => "'>>>='",
+        TokenKind::AndAssign => "'&='",
+        TokenKind::BarAssign => "'|='",
+        TokenKind::CaretAssign => "'^='",
+        TokenKind::AndAndAssign => "'&&='",
+        TokenKind::BarBarAssign => "'||='",
+        TokenKind::NullCoalescingAssign => "'??='",
+
+        TokenKind::Is => "'is'",
+        TokenKind::Typeof => "'typeof'",
+        TokenKind::Sizeof => "'sizeof'",
+
+        TokenKind::IntegerLiteral => "integer literal",
+        TokenKind::FloatLiteral => "float literal",
+        TokenKind::BigIntLiteral => "bigint literal",
+        TokenKind::StringLiteral => "string literal",
+        TokenKind::CStringLiteral => "C-string literal",
+        TokenKind::CharLiteral => "character literal",
+        TokenKind::TemplateNoSubstitution
+        | TokenKind::TemplateHead
+        | TokenKind::TemplateMiddle
+        | TokenKind::TemplateTail => "template literal",
+
+        TokenKind::Identifier => "identifier",
+        TokenKind::PrivateIdentifier => "private identifier",
+
+        TokenKind::Eof => "end of file",
+        TokenKind::Error => "invalid token",
+    }
+}

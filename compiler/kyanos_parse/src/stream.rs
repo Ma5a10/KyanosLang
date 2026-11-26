@@ -28,6 +28,7 @@ pub struct Checkpoint {
     pub(crate) last_span: Span,
     pub(crate) error_len: usize,
     pub(crate) grouping_depth: u32,
+    pub(crate) next_node_id: u32,
 }
 
 /// Token stream supplying non-trivia tokens to [`crate::Parser`].
@@ -54,7 +55,7 @@ impl<'a> TokenStream<'a> {
     /// Lexes `source` while shifting all token spans by `base_offset` (for nested parses).
     pub fn with_offset(source: &'a str, base_offset: usize) -> (Self, Vec<ParseError>) {
         let mut lexer = Lexer::new(source);
-        let mut tokens = Vec::new();
+        let mut tokens = Vec::with_capacity((source.len() / 4).saturating_add(1));
         let mut lex_errors = Vec::new();
         let mut consecutive_errors = 0usize;
 
@@ -246,13 +247,19 @@ impl<'a> TokenStream<'a> {
 
     /// Captures the stream's cursor state for speculative parsing.
     #[inline]
-    pub(crate) fn save_position(&self, error_len: usize, grouping_depth: u32) -> Checkpoint {
+    pub(crate) fn save_position(
+        &self,
+        error_len: usize,
+        grouping_depth: u32,
+        next_node_id: u32,
+    ) -> Checkpoint {
         Checkpoint {
             cursor: self.cursor,
             virtual_token: self.virtual_token,
             last_span: self.last_span,
             error_len,
             grouping_depth,
+            next_node_id,
         }
     }
 

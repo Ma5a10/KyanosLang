@@ -260,48 +260,21 @@ impl<'a> Parser<'a> {
                     continue;
                 }
 
-                let member_start = p.current_span();
-                let is_readonly = p.eat(TokenKind::Readonly).is_some();
-                let name_tok = p.expect(TokenKind::Identifier, "member identifier")?;
-                let name = Ident::new(p.slice(name_tok.span), name_tok.span);
-                let is_optional = p.eat(TokenKind::Question).is_some();
-
-                let member =
-                    if !is_readonly && (p.at(TokenKind::LessThan) || p.at(TokenKind::OpenParen)) {
-                        let type_parameters = if p.at(TokenKind::LessThan) {
-                            Some(p.parse_type_parameters()?)
-                        } else {
-                            None
-                        };
-                        let params = p.parse_parameter_list()?;
-                        p.expect(TokenKind::Colon, "':'")?;
-                        let return_type = p.parse_return_type()?;
-                        let member_span = p.span_from(member_start);
-                        AnonymousStructMember::Method(AnonymousStructMethod::new(
-                            name,
-                            is_optional,
-                            type_parameters,
-                            params,
-                            return_type,
-                            member_span,
-                        ))
-                    } else {
-                        p.expect(TokenKind::Colon, "':'")?;
-                        let ty = p.parse_type()?;
-                        let member_span = p.span_from(member_start);
-                        AnonymousStructMember::Field(AnonymousStructField::new(
-                            is_readonly,
-                            name,
-                            is_optional,
-                            ty,
-                            member_span,
-                        ))
-                    };
-
-                members.push(member);
-
-                if p.eat(TokenKind::Comma).is_none() {
-                    p.parse_eos()?;
+                let start_cursor = p.checkpoint().cursor;
+                match p.parse_anonymous_struct_member() {
+                    Ok((member, synced_separator)) => {
+                        members.push(member);
+                        if !synced_separator && p.eat(TokenKind::Comma).is_none() {
+                            if let Err(err) = p.parse_eos() {
+                                p.report_error(err);
+                                p.synchronize_braced_element(false, true);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        p.report_error(err);
+                        p.synchronize_braced_element_from(start_cursor, false, true);
+                    }
                 }
             }
             Ok::<_, ParseError>(members)
@@ -311,6 +284,73 @@ impl<'a> Parser<'a> {
         let span = self.span_from(open.span);
         let id = self.alloc_id();
         Ok(Type::new(TypeKind::AnonymousStruct(members), span).with_id(id))
+    }
+
+    fn parse_anonymous_struct_member(&mut self) -> ParseResult<(AnonymousStructMember, bool)> {
+        let member_start = self.current_span();
+        let is_readonly = self.eat(TokenKind::Readonly).is_some();
+        let name_tok = self.expect(TokenKind::Identifier, "member identifier")?;
+        let name = Ident::new(self.slice(name_tok.span), name_tok.span);
+        let is_optional = self.eat(TokenKind::Question).is_some();
+
+        if !is_readonly && (self.at(TokenKind::LessThan) || self.at(TokenKind::OpenParen)) {
+            let type_parameters = if self.at(TokenKind::LessThan) {
+                Some(self.parse_type_parameters()?)
+            } else {
+                None
+            };
+            let params = self.parse_parameter_list()?;
+            self.expect(TokenKind::Colon, "':'")?;
+            let mut synced_separator = false;
+            let return_type = match self.parse_return_type() {
+                Ok(rt) => rt,
+                Err(err) => {
+                    let err_span = err.span();
+                    self.report_error(err);
+                    self.synchronize_braced_element(false, true);
+                    synced_separator = true;
+                    let err_id = self.alloc_id();
+                    ReturnType::Type(Type::error(err_span).with_id(err_id))
+                }
+            };
+            let member_span = self.span_from(member_start);
+            Ok((
+                AnonymousStructMember::Method(AnonymousStructMethod::new(
+                    name,
+                    is_optional,
+                    type_parameters,
+                    params,
+                    return_type,
+                    member_span,
+                )),
+                synced_separator,
+            ))
+        } else {
+            self.expect(TokenKind::Colon, "':'")?;
+            let mut synced_separator = false;
+            let ty = match self.parse_type() {
+                Ok(ty) => ty,
+                Err(err) => {
+                    let err_span = err.span();
+                    self.report_error(err);
+                    self.synchronize_braced_element(false, true);
+                    synced_separator = true;
+                    let err_id = self.alloc_id();
+                    Type::error(err_span).with_id(err_id)
+                }
+            };
+            let member_span = self.span_from(member_start);
+            Ok((
+                AnonymousStructMember::Field(AnonymousStructField::new(
+                    is_readonly,
+                    name,
+                    is_optional,
+                    ty,
+                    member_span,
+                )),
+                synced_separator,
+            ))
+        }
     }
 
     fn try_parse_non_generic_function_type(&mut self) -> ParseResult<Option<Type>> {
