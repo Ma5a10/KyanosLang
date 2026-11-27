@@ -147,6 +147,9 @@ pub struct Parser<'a> {
     pub(crate) stop_optional_before_ternary: bool,
     /// Number of enclosing unclosed ternary `then` branches / `switch` `when` guards expecting `:`.
     pub(crate) pending_ternary_then: u32,
+    /// When `true` (top-level of a `switch` expression `when` guard), `=>` terminates the guard
+    /// rather than starting an arrow function or non-generic function type.
+    pub(crate) stop_arrow_for_switch_guard: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -199,6 +202,7 @@ impl<'a> Parser<'a> {
             eos_allows_while: false,
             stop_optional_before_ternary: false,
             pending_ternary_then: 0,
+            stop_arrow_for_switch_guard: false,
         }
     }
 
@@ -418,7 +422,7 @@ impl<'a> Parser<'a> {
         res
     }
 
-    /// Temporarily resets ternary and single-statement EOS boundary flags inside delimited scopes.
+    /// Temporarily resets ternary, switch-guard arrow, and single-statement EOS boundary flags inside delimited scopes.
     #[inline]
     pub(crate) fn with_isolated_ternary_scope<F, T>(&mut self, f: F) -> T
     where
@@ -426,11 +430,13 @@ impl<'a> Parser<'a> {
     {
         let prev_stop = std::mem::replace(&mut self.stop_optional_before_ternary, false);
         let prev_pending = std::mem::replace(&mut self.pending_ternary_then, 0);
+        let prev_guard_arrow = std::mem::replace(&mut self.stop_arrow_for_switch_guard, false);
         let prev_else = std::mem::replace(&mut self.eos_allows_else, false);
         let prev_while = std::mem::replace(&mut self.eos_allows_while, false);
         let res = f(self);
         self.stop_optional_before_ternary = prev_stop;
         self.pending_ternary_then = prev_pending;
+        self.stop_arrow_for_switch_guard = prev_guard_arrow;
         self.eos_allows_else = prev_else;
         self.eos_allows_while = prev_while;
         res

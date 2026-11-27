@@ -229,7 +229,7 @@ impl<'a> Parser<'a> {
             return Ok(StructFieldPattern::Rest(ellipsis.span));
         }
 
-        match self.parse_named_field_or_binding("struct field pattern")? {
+        match self.parse_named_field_or_binding("struct field pattern", false)? {
             FieldPatternEntry::Field {
                 name,
                 pattern,
@@ -282,7 +282,7 @@ impl<'a> Parser<'a> {
             return Ok(ObjectMatchProp::Rest { target, span });
         }
 
-        let entry = self.parse_named_field_or_binding("object property pattern")?;
+        let entry = self.parse_named_field_or_binding("object property pattern", allow_defaults)?;
         let default = if allow_defaults && self.eat(TokenKind::Assign).is_some() {
             Some(Box::new(self.parse_expr()?))
         } else {
@@ -322,6 +322,7 @@ impl<'a> Parser<'a> {
     fn parse_named_field_or_binding(
         &mut self,
         expected_label: &str,
+        allow_object_defaults: bool,
     ) -> ParseResult<FieldPatternEntry> {
         if self.at(TokenKind::Let) || self.at(TokenKind::Const) {
             let mod_tok = self.current();
@@ -339,7 +340,7 @@ impl<'a> Parser<'a> {
         let name_tok = self.expect(TokenKind::Identifier, expected_label)?;
         let name = Ident::new(self.slice(name_tok.span), name_tok.span);
         if self.eat(TokenKind::Colon).is_some() {
-            let pattern = self.parse_pattern()?;
+            let pattern = self.parse_pattern_with_defaults(allow_object_defaults)?;
             let span = self.span_from(name_tok.span);
             Ok(FieldPatternEntry::Field {
                 name,

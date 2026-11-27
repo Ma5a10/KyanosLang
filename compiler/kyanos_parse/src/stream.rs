@@ -238,8 +238,9 @@ impl<'a> TokenStream<'a> {
             _ => return None,
         };
 
-        let first_span = Span::new(tok.span.start, tok.span.start + 1);
-        let rest_span = Span::new(tok.span.start + 1, tok.span.end);
+        let first_end = tok.span.start.saturating_add(1).min(tok.span.end);
+        let first_span = Span::new(tok.span.start, first_end);
+        let rest_span = Span::new(first_end, tok.span.end);
         self.virtual_token = Some(Token::new(remainder_kind, rest_span, false));
         self.last_span = first_span;
         Some(first_span)
@@ -388,6 +389,7 @@ impl<'a> TokenStream<'a> {
         let mut brace_depth: u32 = 0;
         let mut balance: i32 = 1 + pending_ternary_then as i32;
         let mut colons_seen: u32 = 0;
+        let mut in_type_rhs = false;
         let mut depth0_questions: Vec<usize> = vec![q_idx];
 
         let mut idx = q_idx + 1;
@@ -402,22 +404,33 @@ impl<'a> TokenStream<'a> {
                     | TokenKind::CloseParen
                     | TokenKind::CloseBracket
                     | TokenKind::CloseBrace
+                    | TokenKind::Case
+                    | TokenKind::Default
                     | TokenKind::Eof => break,
                     _ if tok.has_leading_newline && is_ternary_scan_stop_keyword(tok.kind) => {
                         break;
                     }
+                    TokenKind::Is | TokenKind::As => {
+                        in_type_rhs = true;
+                    }
                     TokenKind::Question => {
                         depth0_questions.push(idx);
-                        let next_kind = self
-                            .tokens
-                            .get(idx + 1)
-                            .map(|t| t.kind)
-                            .unwrap_or(TokenKind::Eof);
-                        if can_start_expr(next_kind) {
-                            balance += 1;
+                        // A `?` immediately on the type RHS of `is`/`as` may be an optional-type
+                        // suffix `T?` rather than a nested ternary; do not inflate the required
+                        // colon count for such ambiguous `?` tokens.
+                        if !in_type_rhs {
+                            let next_kind = self
+                                .tokens
+                                .get(idx + 1)
+                                .map(|t| t.kind)
+                                .unwrap_or(TokenKind::Eof);
+                            if can_start_expr(next_kind) {
+                                balance += 1;
+                            }
                         }
                     }
                     TokenKind::Colon => {
+                        in_type_rhs = false;
                         colons_seen += 1;
                         balance -= 1;
                         if balance <= 0 {
@@ -427,7 +440,11 @@ impl<'a> TokenStream<'a> {
                     TokenKind::OpenParen => paren_depth += 1,
                     TokenKind::OpenBracket => bracket_depth += 1,
                     TokenKind::OpenBrace => brace_depth += 1,
-                    _ => {}
+                    kind => {
+                        if in_type_rhs && !is_type_rhs_continuation(kind) {
+                            in_type_rhs = false;
+                        }
+                    }
                 }
             } else {
                 match tok.kind {
@@ -461,6 +478,25 @@ impl<'a> TokenStream<'a> {
         }
         false
     }
+}
+
+#[inline]
+fn is_type_rhs_continuation(kind: TokenKind) -> bool {
+    kind.is_primitive_type()
+        || matches!(
+            kind,
+            TokenKind::Identifier
+                | TokenKind::Dot
+                | TokenKind::Star
+                | TokenKind::And
+                | TokenKind::Const
+                | TokenKind::This
+                | TokenKind::LessThan
+                | TokenKind::GreaterThan
+                | TokenKind::ShiftRight
+                | TokenKind::UnsignedShiftRight
+                | TokenKind::Arrow
+        )
 }
 
 #[inline]

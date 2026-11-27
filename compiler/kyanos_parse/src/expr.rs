@@ -266,7 +266,7 @@ impl<'a> Parser<'a> {
                 Ok(Expr::super_kw(tok.span).with_id(id))
             }
             TokenKind::Identifier => {
-                if self.peek_kind(1) == TokenKind::Arrow {
+                if !self.stop_arrow_for_switch_guard && self.peek_kind(1) == TokenKind::Arrow {
                     return self.parse_single_ident_arrow_expr();
                 }
                 self.bump();
@@ -549,29 +549,37 @@ impl<'a> Parser<'a> {
             self.bump(); // ')'
             let paren_span = self.span_from(open.span);
 
-            if self.pending_ternary_then == 0 && self.eat(TokenKind::Colon).is_some() {
-                let return_type = self.parse_return_type()?;
-                if !self.at(TokenKind::Arrow) {
-                    let tok = self.current();
-                    return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
+            if !self.stop_arrow_for_switch_guard {
+                if self.pending_ternary_then == 0 && self.eat(TokenKind::Colon).is_some() {
+                    let return_type = self.parse_return_type()?;
+                    if !self.at(TokenKind::Arrow) {
+                        let tok = self.current();
+                        return Err(ParseError::unexpected("'=>'", tok.kind, tok.span));
+                    }
+                    let params = ParameterList::empty(paren_span);
+                    return self.finish_arrow_function(
+                        open.span,
+                        false,
+                        None,
+                        params,
+                        Some(return_type),
+                    );
                 }
-                let params = ParameterList::empty(paren_span);
-                return self.finish_arrow_function(
-                    open.span,
-                    false,
-                    None,
-                    params,
-                    Some(return_type),
-                );
-            }
 
-            if self.at(TokenKind::Arrow) {
-                let params = ParameterList::empty(paren_span);
-                return self.finish_arrow_function(open.span, false, None, params, None);
+                if self.at(TokenKind::Arrow) {
+                    let params = ParameterList::empty(paren_span);
+                    return self.finish_arrow_function(open.span, false, None, params, None);
+                }
             }
 
             let id = self.alloc_id();
             return Ok(Expr::literal(Literal::unit(paren_span)).with_id(id));
+        }
+
+        // At top-level of a `switch` expression `when` guard, `=>` terminates the guard arm
+        // rather than introducing an arrow function.
+        if self.stop_arrow_for_switch_guard {
+            return self.parse_parenthesized_sequence();
         }
 
         // Pre-scan without recursion: if the matching `)` is followed by neither `=>` nor `:`,
@@ -667,8 +675,10 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let params = self.parse_arrow_params_after_prefix(type_parameters.is_some())?;
-        let return_type = if self.eat(TokenKind::Colon).is_some() {
+        let (params, has_parens) =
+            self.parse_arrow_params_after_prefix(type_parameters.is_some())?;
+        // Per `kyanos_syntax_grammar.g4`, return type annotations require parenthesized parameters.
+        let return_type = if has_parens && self.eat(TokenKind::Colon).is_some() {
             Some(self.parse_return_type()?)
         } else {
             None
@@ -691,17 +701,20 @@ impl<'a> Parser<'a> {
     fn parse_arrow_params_after_prefix(
         &mut self,
         had_type_params: bool,
-    ) -> ParseResult<ParameterList> {
+    ) -> ParseResult<(ParameterList, bool)> {
         if !had_type_params && self.at(TokenKind::Identifier) {
             let ident_tok = self.bump();
             let ident = Ident::new(self.slice(ident_tok.span), ident_tok.span);
-            Ok(ParameterList::new(
-                vec![Parameter::simple(ident, None, ident_tok.span)],
-                None,
-                ident_tok.span,
+            Ok((
+                ParameterList::new(
+                    vec![Parameter::simple(ident, None, ident_tok.span)],
+                    None,
+                    ident_tok.span,
+                ),
+                false,
             ))
         } else {
-            self.parse_parameter_list()
+            Ok((self.parse_parameter_list()?, true))
         }
     }
 
@@ -934,7 +947,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::CloseParen, "')'")?;
         self.expect(TokenKind::OpenBrace, "'{'")?;
 
-        let arms = self.with_isolated_ternary_scope(|p| {
+        let arms = self.with_grouping(|p| {
             let mut arms = Vec::new();
             while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
                 let start_cursor = p.checkpoint().cursor;
@@ -982,7 +995,10 @@ impl<'a> Parser<'a> {
         if self.eat(TokenKind::Case).is_some() {
             let pattern = self.parse_pattern()?;
             let guard = if self.eat(TokenKind::When).is_some() {
-                Some(Box::new(self.parse_expr()?))
+                let prev_guard = std::mem::replace(&mut self.stop_arrow_for_switch_guard, true);
+                let guard_res = self.parse_expr();
+                self.stop_arrow_for_switch_guard = prev_guard;
+                Some(Box::new(guard_res?))
             } else {
                 None
             };
@@ -1083,7 +1099,9 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let type_arguments = if self.at(TokenKind::LessThan) {
+        let type_arguments = if self.at(TokenKind::LessThan)
+            && (self.grouping_depth > 0 || !self.current().has_leading_newline)
+        {
             self.try_parse_type_arguments()
         } else {
             None

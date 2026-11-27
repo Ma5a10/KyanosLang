@@ -3146,3 +3146,220 @@ fn test_section_4_spec_alignments() {
     assert_eq!(s_bad.implements.len(), 1);
     assert_eq!(s_bad.members.len(), 1);
 }
+
+#[test]
+fn test_is_as_ternary_with_nested_optional_and_same_line_switch_case() {
+    // 1. Optional types inside a ternary `then` branch must not prevent the outer `?` from
+    //    being recognized as the ternary operator.
+    for src in [
+        "x is int ? y is int? + 1 : 0",
+        "x is int ? y as int? * 2 : 0",
+        "x is int ? y as int?[] : []",
+        "x is int ? y is Box<int>? + 1 : 0",
+    ] {
+        let expr = parse_expr_ok(src);
+        let ExprKind::Ternary { condition, .. } = expr.kind else {
+            panic!("expected Ternary for `{src}`");
+        };
+        assert!(matches!(
+            condition.kind,
+            ExprKind::TypeTest { ref ty, .. } if ty.kind == TypeKind::Predefined(PredefinedType::Int)
+        ));
+    }
+
+    // 2. Nested `is` ternaries and mixed optional + definite inner ternaries.
+    let nested_is = parse_expr_ok("x is int ? y is int ? 1 : 2 : 3");
+    let ExprKind::Ternary { then_expr, .. } = nested_is.kind else {
+        panic!("expected outer Ternary");
+    };
+    assert!(matches!(then_expr.kind, ExprKind::Ternary { .. }));
+
+    let nested_opt_in_double = parse_expr_ok("flag ? x is int ? y is int? + 1 : 2 : 0");
+    let ExprKind::Ternary {
+        then_expr: mid_t, ..
+    } = nested_opt_in_double.kind
+    else {
+        panic!("expected outer Ternary");
+    };
+    assert!(matches!(mid_t.kind, ExprKind::Ternary { .. }));
+
+    let opt_plus_definite_ternary = parse_expr_ok("flag ? x is int? + a ? 1 : 2 : 0");
+    let ExprKind::Ternary {
+        then_expr: inner_t, ..
+    } = opt_plus_definite_ternary.kind
+    else {
+        panic!("expected outer Ternary");
+    };
+    let ExprKind::Ternary {
+        condition: inner_cond,
+        ..
+    } = inner_t.kind
+    else {
+        panic!("expected inner Ternary after `x is int? + a`");
+    };
+    assert!(matches!(
+        inner_cond.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            ref left,
+            ..
+        } if matches!(left.kind, ExprKind::TypeTest { ref ty, .. } if matches!(ty.kind, TypeKind::Optional(_)))
+    ));
+
+    // 3. Same-line `case` following a `when` guard with `T? + 1` must stop ternary lookahead.
+    let same_line_sw = parse_stmt_ok("switch (v) { case n when n is int? + 1: case 2: break }");
+    let StmtKind::Switch(sw) = same_line_sw.kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(sw.cases.len(), 2);
+}
+
+#[test]
+fn test_async_arrow_grammar_alignment_and_nested_tuple_object_defaults() {
+    // 1. `async` single-identifier arrow without parens cannot have a `: returnType` annotation.
+    let ok_async_single = parse_expr_ok("async x => await x");
+    assert!(matches!(ok_async_single.kind, ExprKind::ArrowFunction(_)));
+
+    let ok_async_paren = parse_expr_ok("async (x): int => await x");
+    assert!(matches!(ok_async_paren.kind, ExprKind::ArrowFunction(_)));
+
+    let (_, bad_async_errs) = parse_expr("async x: int => x");
+    assert!(
+        !bad_async_errs.is_empty(),
+        "expected syntax error for `async x: int => x`"
+    );
+
+    // 2. Nested object defaults inside tuple destructuring bindings propagate `allow_defaults`.
+    let nested_obj = parse_stmt_ok("let [a, { x: { y = 1 } }] = v");
+    assert!(matches!(nested_obj.kind, StmtKind::Variable(_)));
+
+    let nested_tuple_obj = parse_stmt_ok("let [a, { x: [{ y = 1 }] }] = v");
+    assert!(matches!(nested_tuple_obj.kind, StmtKind::Variable(_)));
+
+    // `switch` match patterns still disallow `= expr` defaults inside nested object patterns.
+    let mut bad_switch_pat = Parser::new("switch (v) { case { x: { y = 1 } }: break }");
+    let _ = bad_switch_pat.parse_stmt();
+    assert!(
+        !bad_switch_pat.errors().is_empty(),
+        "switch match pattern must reject default value `= 1`"
+    );
+}
+
+#[test]
+fn test_new_newline_generic_arrow_switch_expr_grouping_and_span_consistency() {
+    use kyanos_lexer::Token;
+    use kyanos_parse::TokenStream;
+
+    // 1. `new Foo` followed by a newline `<T>(x: T) => x` splits into two statements.
+    let block = parse_block_ok("{\n let a = new Foo\n<T>(x: T) => x\n}");
+    assert_eq!(block.statements.len(), 2);
+    assert!(matches!(block.statements[0].kind, StmtKind::Variable(_)));
+    assert!(matches!(
+        block.statements[1].kind,
+        StmtKind::Expr(Expr {
+            kind: ExprKind::ArrowFunction(_),
+            ..
+        })
+    ));
+
+    // Inside grouping parens, multiline `new Foo\n<int>(1)` continues as a generic `new`.
+    let grouped_new = parse_expr_ok("(new Foo\n<int>(1))");
+    assert!(matches!(
+        grouped_new.kind,
+        ExprKind::Parenthesized(ref inner)
+            if matches!(inner.kind, ExprKind::New { type_arguments: Some(_), args: Some(_), .. })
+    ));
+
+    // 2. `switch` expression arms permit multiline continuations inside `{ ... }`.
+    let multiline_sw = parse_expr_ok("switch (x) {\n case 1 => a\n + b,\n default => 0\n}");
+    let ExprKind::Switch { arms, .. } = multiline_sw.kind else {
+        panic!("expected Switch expression");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(matches!(
+        &arms[0],
+        SwitchExprArm::Case { body, .. }
+            if matches!(body.kind, ExprKind::Binary { op: BinaryOp::Add, .. })
+    ));
+
+    // 3. Compound statement spans exclude trailing `;` of braceless single-statement bodies.
+    for (src, expected) in [
+        ("if (c) x = 1;", "if (c) x = 1"),
+        ("if (c) x = 1; else y = 2;", "if (c) x = 1; else y = 2"),
+        ("while (c) x = 1;", "while (c) x = 1"),
+        ("for (;;) x = 1;", "for (;;) x = 1"),
+        (
+            "for (let item of arr) work(item);",
+            "for (let item of arr) work(item)",
+        ),
+        ("defer free(p);", "defer free(p)"),
+        ("lbl: x = 1;", "lbl: x = 1"),
+    ] {
+        let stmt = parse_stmt_ok(src);
+        assert_eq!(
+            &src[stmt.span.start..stmt.span.end],
+            expected,
+            "span mismatch for `{src}`"
+        );
+    }
+
+    // 4. Recovered anonymous struct member span excludes trailing `,`.
+    let anon_src = "{ port: , host: string }";
+    let mut ty_parser = Parser::new(anon_src);
+    let anon_ty = ty_parser.parse_type().expect("should recover");
+    let TypeKind::AnonymousStruct(members) = anon_ty.kind else {
+        panic!("expected AnonymousStruct");
+    };
+    let port_span = members[0].span();
+    assert_eq!(&anon_src[port_span.start..port_span.end], "port:");
+
+    // 5. `eat_generic_gt` does not panic on synthetic zero-width compound tokens.
+    let zero_gt = Token::new(TokenKind::ShiftRight, Span::new(0, 0), false);
+    let mut stream = TokenStream::from_tokens("", vec![zero_gt]);
+    assert_eq!(stream.eat_generic_gt(), Some(Span::new(0, 0)));
+    assert_eq!(stream.current().kind, TokenKind::GreaterThan);
+}
+
+#[test]
+fn test_switch_expr_when_guard_arrow_disambiguation() {
+    // 1. Top-level `=>` terminates `switch` expression `when` guards instead of starting
+    //    an arrow function or non-generic function type.
+    for src in [
+        "switch (x) { case y when flag => 1, default => 0 }",
+        "switch (x) { case y when a && flag => 1, default => 0 }",
+        "switch (x) { case y when (flag) => 1, default => 0 }",
+        "switch (x) { case y when () => 1, default => 0 }",
+        "switch (x) { case y when y is (int) => 1, default => 0 }",
+        "switch (x) { case y when y as (bool) => 1, default => 0 }",
+        "switch (x) { case y when cond ? a : b => 1, default => 0 }",
+    ] {
+        let expr = parse_expr_ok(src);
+        let ExprKind::Switch { arms, .. } = expr.kind else {
+            panic!("expected Switch expression for `{src}`");
+        };
+        assert_eq!(arms.len(), 2, "expected 2 arms for `{src}`");
+        assert!(matches!(
+            &arms[0],
+            SwitchExprArm::Case { guard: Some(_), .. }
+        ));
+    }
+
+    // 2. Arrow functions and function types inside delimited sub-expressions of `when` guards
+    //    continue to parse normally.
+    for src in [
+        r#"switch (x) { case arr when arr.some(v => v > 0) => "pos", default => "none" }"#,
+        r#"switch (x) { case f when f is ((int) => bool) => "fn", default => "other" }"#,
+        r#"switch (x) { case b when b is Box<(int) => void> => "box", default => "other" }"#,
+        r#"switch (x) { case y when (v => v > 0)(y) => "ok", default => "no" }"#,
+    ] {
+        let expr = parse_expr_ok(src);
+        let ExprKind::Switch { arms, .. } = expr.kind else {
+            panic!("expected Switch expression for `{src}`");
+        };
+        assert_eq!(arms.len(), 2, "expected 2 arms for `{src}`");
+        assert!(matches!(
+            &arms[0],
+            SwitchExprArm::Case { guard: Some(_), .. }
+        ));
+    }
+}

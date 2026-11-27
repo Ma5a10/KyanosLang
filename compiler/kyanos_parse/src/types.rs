@@ -303,10 +303,12 @@ impl<'a> Parser<'a> {
             let params = self.parse_parameter_list()?;
             self.expect(TokenKind::Colon, "':'")?;
             let mut synced_separator = false;
+            let mut member_span = None;
             let return_type = match self.parse_return_type() {
                 Ok(rt) => rt,
                 Err(err) => {
                     let err_span = err.span();
+                    member_span = Some(self.span_from(member_start));
                     self.report_error(err);
                     self.synchronize_braced_element(false, true);
                     synced_separator = true;
@@ -314,7 +316,7 @@ impl<'a> Parser<'a> {
                     ReturnType::Type(Type::error(err_span).with_id(err_id))
                 }
             };
-            let member_span = self.span_from(member_start);
+            let member_span = member_span.unwrap_or_else(|| self.span_from(member_start));
             Ok((
                 AnonymousStructMember::Method(AnonymousStructMethod::new(
                     name,
@@ -329,10 +331,12 @@ impl<'a> Parser<'a> {
         } else {
             self.expect(TokenKind::Colon, "':'")?;
             let mut synced_separator = false;
+            let mut member_span = None;
             let ty = match self.parse_type() {
                 Ok(ty) => ty,
                 Err(err) => {
                     let err_span = err.span();
+                    member_span = Some(self.span_from(member_start));
                     self.report_error(err);
                     self.synchronize_braced_element(false, true);
                     synced_separator = true;
@@ -340,7 +344,7 @@ impl<'a> Parser<'a> {
                     Type::error(err_span).with_id(err_id)
                 }
             };
-            let member_span = self.span_from(member_start);
+            let member_span = member_span.unwrap_or_else(|| self.span_from(member_start));
             Ok((
                 AnonymousStructMember::Field(AnonymousStructField::new(
                     is_readonly,
@@ -355,6 +359,12 @@ impl<'a> Parser<'a> {
     }
 
     fn try_parse_non_generic_function_type(&mut self) -> ParseResult<Option<Type>> {
+        // At top-level of a `switch` expression `when` guard (e.g. `when y is (int) => ...`),
+        // `=>` belongs to the switch arm rather than a non-generic function type.
+        if self.stop_arrow_for_switch_guard {
+            return Ok(None);
+        }
+
         // Fast path: `()` must be a function type `() => ReturnType`.
         if self.peek_kind(1) == TokenKind::CloseParen {
             return self.parse_function_type(false).map(Some);

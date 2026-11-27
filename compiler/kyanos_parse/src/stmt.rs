@@ -229,7 +229,8 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let span = self.span_from(if_tok.span);
+        let end_span = else_branch.as_ref().map_or(then_branch.span, |e| e.span);
+        let span = if_tok.span.merge(end_span);
         let id = self.alloc_id();
         Ok(Stmt::if_stmt(condition, then_branch, else_branch, span).with_id(id))
     }
@@ -241,7 +242,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::CloseParen, "')'")?;
 
         let body = self.parse_stmt()?;
-        let span = self.span_from(while_tok.span);
+        let span = while_tok.span.merge(body.span);
         let id = self.alloc_id();
         Ok(Stmt::while_stmt(condition, body, span).with_id(id))
     }
@@ -308,7 +309,7 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::CloseParen, "')'")?;
         let body = self.parse_stmt()?;
-        let span = self.span_from(for_tok.span);
+        let span = for_tok.span.merge(body.span);
         let id = self.alloc_id();
         Ok(Stmt::for_standard(init, test, update, body, span).with_id(id))
     }
@@ -339,7 +340,7 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::CloseParen, "')'")?;
         let body = self.parse_stmt()?;
-        let span = self.span_from(for_start);
+        let span = for_start.merge(body.span);
         let id = self.alloc_id();
         Ok(Some(
             Stmt::for_iteration(modifier, target, kind, iterable, body, span).with_id(id),
@@ -534,7 +535,7 @@ impl<'a> Parser<'a> {
     fn parse_defer_stmt(&mut self) -> ParseResult<Stmt> {
         let defer_tok = self.expect(TokenKind::Defer, "'defer'")?;
         let inner = self.parse_stmt()?;
-        let span = self.span_from(defer_tok.span);
+        let span = defer_tok.span.merge(inner.span);
         let id = self.alloc_id();
         Ok(Stmt::defer_stmt(inner, span).with_id(id))
     }
@@ -552,7 +553,7 @@ impl<'a> Parser<'a> {
         let label = Ident::new(self.slice(label_tok.span), label_tok.span);
         self.expect(TokenKind::Colon, "':'")?;
         let stmt = self.parse_stmt()?;
-        let span = self.span_from(label_tok.span);
+        let span = label_tok.span.merge(stmt.span);
         let id = self.alloc_id();
         Ok(Stmt::labeled(label, stmt, span).with_id(id))
     }
