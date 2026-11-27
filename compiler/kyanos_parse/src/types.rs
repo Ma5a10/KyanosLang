@@ -41,6 +41,7 @@ pub fn token_to_predefined_type(kind: TokenKind) -> Option<PredefinedType> {
         TokenKind::TypeShort => Some(PredefinedType::Short),
         TokenKind::TypeInt => Some(PredefinedType::Int),
         TokenKind::TypeLong => Some(PredefinedType::Long),
+        TokenKind::TypeIsize => Some(PredefinedType::Isize),
         TokenKind::TypeSizeT => Some(PredefinedType::SizeT),
         TokenKind::TypeUbyte => Some(PredefinedType::Ubyte),
         TokenKind::TypeUshort => Some(PredefinedType::Ushort),

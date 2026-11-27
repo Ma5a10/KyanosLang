@@ -94,6 +94,38 @@ impl ObjectPatternProp {
     }
 }
 
+/// Property pattern inside an object / anonymous struct match pattern:
+/// `{ x: 0, y: let y, z, ...rest }`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectMatchProp {
+    /// Explicit field match: `field: pattern` (with optional destructuring default `= expr`).
+    Field {
+        name: Ident,
+        pattern: Pattern,
+        default: Option<Box<Expr>>,
+        span: Span,
+    },
+    /// Field binding shorthand with optional modifier: `let x`, `const x`, or `x` (with optional default).
+    Binding {
+        modifier: Option<VarModifier>,
+        name: Ident,
+        default: Option<Box<Expr>>,
+        span: Span,
+    },
+    /// Rest placeholder with optional binding identifier: `...rest` or `...`.
+    Rest { target: Option<Ident>, span: Span },
+}
+
+impl ObjectMatchProp {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Field { span, .. } | Self::Binding { span, .. } | Self::Rest { span, .. } => {
+                *span
+            }
+        }
+    }
+}
+
 /// Element in a tuple pattern: `[p1, ...rest, p2]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TuplePatternElement {
@@ -218,7 +250,7 @@ pub enum PatternKind {
     /// Tuple pattern: `[a, ...rest, b]`.
     Tuple(Vec<TuplePatternElement>),
     /// Object / anonymous struct pattern: `{ x: 0, y: let y, ...rest }`.
-    Object(Vec<ObjectPatternProp>),
+    Object(Vec<ObjectMatchProp>),
     /// Placeholder produced by fault-tolerant error recovery in the parser.
     Error,
 }
@@ -298,7 +330,7 @@ impl Pattern {
         Self::new(PatternKind::Tuple(elements), span)
     }
 
-    pub fn object(props: Vec<ObjectPatternProp>, span: Span) -> Self {
+    pub fn object(props: Vec<ObjectMatchProp>, span: Span) -> Self {
         Self::new(PatternKind::Object(props), span)
     }
 }

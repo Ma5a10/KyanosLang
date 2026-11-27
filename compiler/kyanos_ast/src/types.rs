@@ -18,13 +18,14 @@ pub enum PredefinedType {
     Short, // short / i16
     Int,   // int / i32
     Long,  // long / i64
-    SizeT, // size_t / isize
+    Isize, // isize
 
     // Unsigned integers
     Ubyte,  // ubyte / u8
     Ushort, // ushort / u16
     Uint,   // uint / u32
     Ulong,  // ulong / u64
+    SizeT,  // size_t / usize
 
     // Floating points
     Float,  // float / f32
@@ -47,6 +48,7 @@ impl PredefinedType {
             Self::Short => "short",
             Self::Int => "int",
             Self::Long => "long",
+            Self::Isize => "isize",
             Self::SizeT => "size_t",
             Self::Ubyte => "ubyte",
             Self::Ushort => "ushort",

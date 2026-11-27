@@ -8,10 +8,11 @@ use kyanos_ast::{
     AccessorKind, AnonymousStructMember, ArraySize, ArrowBody, AssignOp, AttributeInput, BinaryOp,
     BindingTarget, Block, ClassElementName, ClassMember, DeclKind, EnumVariant, ExportKind, Expr,
     ExprKind, ExternMember, ForInit, ForIterationKind, ForStmt, ImportClause, InterfaceMember,
-    LiteralKind, LiteralSign, MemberProperty, NodeId, ObjectMember, ObjectPatternProp, Pattern,
-    PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp, PropertyName, Radix, ReturnType,
-    SizeofTarget, SourceElement, Span, Stmt, StmtKind, StructFieldInit, StructFieldPattern,
-    StructMember, SwitchCase, SwitchExprArm, TemplateStringPart, Type, TypeKind, VarModifier,
+    LiteralKind, LiteralSign, MemberProperty, NodeId, ObjectMatchProp, ObjectMember,
+    ObjectPatternProp, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
+    PropertyName, Radix, ReturnType, SizeofTarget, SourceElement, Span, Stmt, StmtKind,
+    StructFieldInit, StructFieldPattern, StructMember, SwitchCase, SwitchExprArm,
+    TemplateStringPart, Type, TypeKind, VarModifier,
 };
 use kyanos_lexer::TokenKind;
 use kyanos_parse::{parse, parse_expr, ParseError, ParseErrorKind, ParseOutput, Parser};
@@ -1054,21 +1055,46 @@ fn test_patterns_and_binding_targets() {
     assert!(matches!(elems[1].pattern.kind, PatternKind::Tuple(_)));
     assert!(elems[2].is_rest);
 
-    // Object pattern in both Pattern and BindingTarget
-    let obj_pat = parse_pattern_ok("{ x, y: [a, b] = [1, 2], ...rest }");
+    // Object pattern in Pattern (value/nested pattern matching) and BindingTarget (destructuring)
+    let obj_pat = parse_pattern_ok("{ x: 0, y: [a, b], let z, ...rest }");
     let PatternKind::Object(props) = obj_pat.kind else {
         panic!("expected Object pattern");
     };
-    assert_eq!(props.len(), 3);
+    assert_eq!(props.len(), 4);
     assert!(matches!(
-        props[1],
-        ObjectPatternProp::Property {
-            target: Some(BindingTarget::Tuple { .. }),
-            default: Some(_),
+        props[0],
+        ObjectMatchProp::Field {
+            pattern: Pattern {
+                kind: PatternKind::Literal(_),
+                ..
+            },
             ..
         }
     ));
-    assert!(matches!(props[2], ObjectPatternProp::Rest { .. }));
+    assert!(matches!(
+        props[1],
+        ObjectMatchProp::Field {
+            pattern: Pattern {
+                kind: PatternKind::Tuple(_),
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        props[2],
+        ObjectMatchProp::Binding {
+            modifier: Some(VarModifier::Let),
+            ..
+        }
+    ));
+    assert!(matches!(
+        props[3],
+        ObjectMatchProp::Rest {
+            target: Some(_),
+            ..
+        }
+    ));
 
     // BindingTarget tuple & nested object destructuring
     let bt = parse_binding_ok("[first, { a, b: renamed = 10 }, ...others]");
@@ -3043,4 +3069,80 @@ fn test_member_arm_recovery_and_uniform_stmt_spans() {
         "let x = 10",
         "statement span must not swallow EOS-recovery tokens"
     );
+}
+
+#[test]
+fn test_section_4_spec_alignments() {
+    // 4.1 Object match pattern inside `switch`: `case { x: 0, y: let y, ...rest }:`
+    let obj_switch = parse_stmt_ok(
+        "switch (pt) {\n case { x: 0, y: let y, const w, ...rest }: return y\n default: return 0\n}",
+    );
+    let StmtKind::Switch(sw_obj) = obj_switch.kind else {
+        panic!("expected Switch");
+    };
+    let SwitchCase::Case { pattern, .. } = &sw_obj.cases[0] else {
+        panic!("expected Case");
+    };
+    assert!(matches!(pattern.kind, PatternKind::Object(ref props) if props.len() == 4));
+
+    // 4.2 Unit literal pattern `()` inside `Ok(())`
+    let unit_switch =
+        parse_stmt_ok("switch (res) {\n case Ok(()): return 1\n case Err(_): return 0\n}");
+    let StmtKind::Switch(sw_unit) = unit_switch.kind else {
+        panic!("expected Switch");
+    };
+    let SwitchCase::Case {
+        pattern: ok_pat, ..
+    } = &sw_unit.cases[0]
+    else {
+        panic!("expected Case");
+    };
+    let PatternKind::Variant { payload, .. } = &ok_pat.kind else {
+        panic!("expected Variant pattern");
+    };
+    assert_eq!(payload.len(), 1);
+    assert!(matches!(
+        payload[0].kind,
+        PatternKind::Literal(ref lp) if lp.literal.kind == LiteralKind::Unit
+    ));
+
+    // 4.4 `isize` (signed) is distinct from `size_t` / `usize` (unsigned)
+    assert_eq!(
+        parse_type_ok("isize").kind,
+        TypeKind::Predefined(PredefinedType::Isize)
+    );
+    assert_eq!(
+        parse_type_ok("size_t").kind,
+        TypeKind::Predefined(PredefinedType::SizeT)
+    );
+    assert_eq!(
+        parse_type_ok("usize").kind,
+        TypeKind::Predefined(PredefinedType::SizeT)
+    );
+
+    // 4.5 Struct `implements` is allowed; `extends` emits a dedicated diagnostic and recovers.
+    let ok_struct = parse("struct Point implements Printable, Eq { x: int }");
+    assert!(!ok_struct.has_errors(), "{:?}", ok_struct.errors);
+    let SourceElement::Decl(sd_ok) = &ok_struct.program.elements[0] else {
+        panic!("expected Decl");
+    };
+    let DeclKind::Struct(s_ok) = &sd_ok.kind else {
+        panic!("expected StructDecl");
+    };
+    assert_eq!(s_ok.implements.len(), 2);
+
+    let bad_struct = parse("struct Sub extends Base implements Printable { x: int }");
+    assert_eq!(bad_struct.errors.len(), 1);
+    assert!(bad_struct.errors[0].message().contains("extends"));
+    assert!(bad_struct.errors[0]
+        .hint()
+        .is_some_and(|h| h.contains("implements")));
+    let SourceElement::Decl(sd_bad) = &bad_struct.program.elements[0] else {
+        panic!("expected recovered StructDecl");
+    };
+    let DeclKind::Struct(s_bad) = &sd_bad.kind else {
+        panic!("expected StructDecl");
+    };
+    assert_eq!(s_bad.implements.len(), 1);
+    assert_eq!(s_bad.members.len(), 1);
 }

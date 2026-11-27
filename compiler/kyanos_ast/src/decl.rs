@@ -258,6 +258,7 @@ pub struct StructDecl {
     pub attributes: Vec<Attribute>,
     pub name: Ident,
     pub type_parameters: Option<TypeParameters>,
+    pub implements: Vec<TypeReference>,
     pub members: Vec<StructMember>,
     pub span: Span,
 }
@@ -267,6 +268,7 @@ impl StructDecl {
         attributes: Vec<Attribute>,
         name: Ident,
         type_parameters: Option<TypeParameters>,
+        implements: Vec<TypeReference>,
         members: Vec<StructMember>,
         span: Span,
     ) -> Self {
@@ -274,6 +276,7 @@ impl StructDecl {
             attributes,
             name,
             type_parameters,
+            implements,
             members,
             span,
         }

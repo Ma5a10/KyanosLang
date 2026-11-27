@@ -16,13 +16,13 @@ use kyanos_ast::{
     ForInit, ForIterationKind, ForStmt, FunctionDecl, FunctionType, FunctionTypeParam,
     GetterSetterDecl, Ident, ImportClause, ImportSpecifier, ImportStmt, IndexSignature,
     InterfaceDecl, InterfaceMember, InterfaceMethod, InterfaceProperty, Literal, LiteralKind,
-    LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMember, ObjectPatternProp, Parameter,
-    ParameterList, Pattern, PatternKind, PostfixUnaryOp, PredefinedType, PrefixUnaryOp,
-    PrivateIdent, Program, PropertyName, Radix, RestParameter, ReturnType, SingleExternDecl,
-    SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral, StructDecl, StructField,
-    StructFieldInit, StructFieldPattern, StructMember, SwitchCase, SwitchExprArm,
-    TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments, TypeKind,
-    TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
+    LiteralSign, MemberProperty, MethodDecl, NodeId, ObjectMatchProp, ObjectMember,
+    ObjectPatternProp, Parameter, ParameterList, Pattern, PatternKind, PostfixUnaryOp,
+    PredefinedType, PrefixUnaryOp, PrivateIdent, Program, PropertyName, Radix, RestParameter,
+    ReturnType, SingleExternDecl, SizeofTarget, SourceElement, Span, Stmt, StmtKind, StringLiteral,
+    StructDecl, StructField, StructFieldInit, StructFieldPattern, StructMember, SwitchCase,
+    SwitchExprArm, TemplateStringPart, TuplePatternElement, Type, TypeAliasDecl, TypeArguments,
+    TypeKind, TypeName, TypeParameter, TypeParameters, TypePredicate, TypeReference, VarModifier,
     VariableDecl,
 };
 
@@ -924,25 +924,34 @@ fn test_patterns() {
     let empty_tuple = BindingTarget::tuple(Vec::new(), Span::new(4, 6));
     assert_eq!(empty_tuple.span(), Span::new(4, 6));
 
-    // Object pattern in PatternKind: { x, y: target = 10, ...rest }
+    // Object pattern in PatternKind: { x: 0, y: let y, ...rest }
     let obj_pat = Pattern::object(
         vec![
-            ObjectPatternProp::Property {
+            ObjectMatchProp::Field {
                 name: Ident::new("x", Span::new(2, 3)),
-                target: None,
+                pattern: Pattern::literal(
+                    Literal::integer("0", 0, Radix::Decimal, Span::new(5, 6)),
+                    Span::new(5, 6),
+                ),
                 default: None,
-                span: Span::new(2, 3),
+                span: Span::new(2, 6),
             },
-            ObjectPatternProp::Rest {
-                target: Ident::new("rest", Span::new(8, 12)),
-                span: Span::new(5, 12),
+            ObjectMatchProp::Binding {
+                modifier: Some(VarModifier::Let),
+                name: Ident::new("y", Span::new(12, 13)),
+                default: None,
+                span: Span::new(8, 13),
+            },
+            ObjectMatchProp::Rest {
+                target: Some(Ident::new("rest", Span::new(18, 22))),
+                span: Span::new(15, 22),
             },
         ],
-        Span::new(0, 14),
+        Span::new(0, 24),
     );
     if let PatternKind::Object(props) = obj_pat.kind {
-        assert_eq!(props.len(), 2);
-        assert_eq!(obj_pat.span, Span::new(0, 14));
+        assert_eq!(props.len(), 3);
+        assert_eq!(obj_pat.span, Span::new(0, 24));
     } else {
         panic!("expected PatternKind::Object");
     }
@@ -1351,6 +1360,7 @@ fn test_function_and_struct_declarations() {
         vec![repr_attr],
         Ident::new("Point", Span::new(17, 22)),
         None,
+        Vec::new(),
         vec![field, ctor, method],
         Span::new(0, 91),
     );
@@ -1663,6 +1673,7 @@ fn test_export_statements() {
         Vec::new(),
         Ident::new("Point", Span::new(14, 19)),
         None,
+        Vec::new(),
         Vec::new(),
         Span::new(7, 24),
     ));

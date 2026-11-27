@@ -118,7 +118,11 @@ impl ParseError {
                     found,
                 },
                 span,
-                format!("Expected {}, found {}", expected_str, token_kind_display(found)),
+                format!(
+                    "Expected {}, found {}",
+                    expected_str,
+                    token_kind_display(found)
+                ),
             )
         }
     }
@@ -249,6 +253,7 @@ pub fn token_kind_display(kind: TokenKind) -> &'static str {
         TokenKind::TypeShort => "'short'",
         TokenKind::TypeInt => "'int'",
         TokenKind::TypeLong => "'long'",
+        TokenKind::TypeIsize => "'isize'",
         TokenKind::TypeSizeT => "'size_t'",
         TokenKind::TypeUbyte => "'ubyte'",
         TokenKind::TypeUshort => "'ushort'",

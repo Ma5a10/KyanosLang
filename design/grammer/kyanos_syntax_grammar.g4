@@ -109,7 +109,16 @@ bindingTarget:
 	Identifier
 	| Underscore
 	| tuplePattern
-	| objectPattern;
+	| objectBindingPattern;
+
+objectBindingPattern:
+	OpenBrace (
+		objectBindingProperty (Comma objectBindingProperty)* Comma?
+	)? CloseBrace;
+
+objectBindingProperty:
+	Identifier (Colon bindingTarget)? (Assign singleExpression)?
+	| Ellipsis Identifier;
 
 // Deterministic Resource Management (design.md Section 4.1 & 5.4): - 'using' declaration
 // (TypeScript 5.2 / C# style). - Applicable to instances implementing the 'Disposable' interface
@@ -152,10 +161,11 @@ accessibilityModifier: Public | Protected | Private;
 // dispatch. - Compile-Time Mutability Check: The compiler statically inspects methods modifying
 // fields. Calling mutating methods on a 'const' struct instance produces a compile-time error. -
 // Inheritance Forbidden: 'extends' is prohibited for structs (C# model) to eliminate object slicing
-// and memory fragmentation; composition and interface conformance are used instead.
+// and memory fragmentation; composition and interface conformance ('implements') are used instead.
 
 structDeclaration:
-	attribute* Struct Identifier typeParameters? OpenBrace structMember* CloseBrace;
+	attribute* Struct Identifier typeParameters? implementsClause? OpenBrace structMember*
+		CloseBrace;
 
 structMember:
 	structField
@@ -277,7 +287,7 @@ enumVariantList: enumVariant (Comma enumVariant)* Comma?;
 
 enumVariant:
 	Identifier OpenParen enumPayloadList? CloseParen
-		// Variant with payload, e.g. KeyPress(char), Click(x: int, y: int)
+	// Variant with payload, e.g. KeyPress(char), Click(x: int, y: int)
 	| Identifier (Assign singleExpression)?; // Simple numeric/unit variant, e.g. PageLoad, Ok = 200
 
 enumPayloadList:
@@ -373,20 +383,22 @@ primaryType:
 	| OpenParen type_ CloseParen	# ParenthesizedTypeRef
 	| This							# ThisTypeRef;
 
-// Predefined Built-in Primitives (design.md Section 3.3): - Integers: byte(i8), short(i16),
-// int(i32), long(i64), size_t(isize) and unsigned ubyte, ushort, uint, ulong. - Floats: float(f32),
-// double(f64). - String & Char: char (UTF-32 scalar, 4 bytes), string (PEP 393 flexible
-// representation with O(1) indexing). - Low-level & Control: rawptr (void*), void, never, bool.
+// Predefined Built-in Primitives (design.md Section 3.3): - Integers: signed byte(i8), short(i16),
+// int(i32), long(i64), isize and unsigned ubyte(u8), ushort(u16), uint(u32), ulong(u64),
+// size_t(usize). - Floats: float(f32), double(f64). - String & Char: char (UTF-32 scalar, 4 bytes),
+// string (PEP 393 flexible representation with O(1) indexing). - Low-level & Control: rawptr
+// (void*), void, never, bool.
 predefinedType:
 	TypeByte
 	| TypeShort
 	| TypeInt
 	| TypeLong
-	| TypeSizeT
+	| TypeIsize
 	| TypeUbyte
 	| TypeUshort
 	| TypeUint
 	| TypeUlong
+	| TypeSizeT
 	| TypeFloat
 	| TypeDouble
 	| TypeBool
@@ -546,7 +558,8 @@ pattern:
 	| varPattern;
 
 literalPattern:
-	(Plus | Minus)? IntegerLiteral
+	OpenParen CloseParen
+	| (Plus | Minus)? IntegerLiteral
 	| (Plus | Minus)? FloatLiteral
 	| (Plus | Minus)? BigIntLiteral
 	| StringLiteral
@@ -583,8 +596,9 @@ objectPattern:
 	)? CloseBrace;
 
 objectPatternProperty:
-	Identifier (Colon bindingTarget)? (Assign singleExpression)?
-	| Ellipsis Identifier;
+	Identifier Colon pattern
+	| (Let | Const)? Identifier
+	| Ellipsis Identifier?;
 
 wildcardPattern: Underscore;
 
@@ -743,10 +757,10 @@ unsafeExpression: Unsafe block;
 
 // Arrow Function: (x: int, y: int): int => x + y
 arrowFunction:
-	Async? typeParameters? (
-		Identifier
-		| OpenParen parameterList? CloseParen
-	) (Colon returnType)? Arrow (singleExpression | block);
+	Async? Identifier Arrow (singleExpression | block)
+	| Async? typeParameters? OpenParen parameterList? CloseParen (
+		Colon returnType
+	)? Arrow (singleExpression | block);
 
 // Array Literal: [1, 2, 3] (infers T[] dynamic array unless annotated as T[N] fixed-size array)
 arrayLiteral:

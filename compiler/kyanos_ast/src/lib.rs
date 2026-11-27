@@ -37,8 +37,8 @@ pub use literal::{
 };
 pub use op::{precedence, AssignOp, Associativity, BinaryOp, PostfixUnaryOp, PrefixUnaryOp};
 pub use pattern::{
-    BindingTarget, LiteralPattern, LiteralSign, ObjectPatternProp, Pattern, PatternKind,
-    StructFieldPattern, TuplePatternElement, VarModifier,
+    BindingTarget, LiteralPattern, LiteralSign, ObjectMatchProp, ObjectPatternProp, Pattern,
+    PatternKind, StructFieldPattern, TuplePatternElement, VarModifier,
 };
 pub use stmt::{
     Block, BreakStmt, ContinueStmt, DeferStmt, DoWhileStmt, ForInit, ForIterationKind, ForStmt,

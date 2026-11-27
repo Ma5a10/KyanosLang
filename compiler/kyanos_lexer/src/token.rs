@@ -101,7 +101,8 @@ pub enum TokenKind {
     TypeShort,  // 'short' | 'i16'
     TypeInt,    // 'int' | 'i32'
     TypeLong,   // 'long' | 'i64'
-    TypeSizeT,  // 'size_t' | 'isize'
+    TypeIsize,  // 'isize'
+    TypeSizeT,  // 'size_t' | 'usize'
     TypeUbyte,  // 'ubyte' | 'u8'
     TypeUshort, // 'ushort' | 'u16'
     TypeUint,   // 'uint' | 'u32'
@@ -288,6 +289,7 @@ impl TokenKind {
                 | Self::TypeShort
                 | Self::TypeInt
                 | Self::TypeLong
+                | Self::TypeIsize
                 | Self::TypeSizeT
                 | Self::TypeUbyte
                 | Self::TypeUshort
@@ -415,7 +417,8 @@ impl TokenKind {
             "short" | "i16" => Some(TokenKind::TypeShort),
             "int" | "i32" => Some(TokenKind::TypeInt),
             "long" | "i64" => Some(TokenKind::TypeLong),
-            "size_t" | "isize" => Some(TokenKind::TypeSizeT),
+            "isize" => Some(TokenKind::TypeIsize),
+            "size_t" | "usize" => Some(TokenKind::TypeSizeT),
             "ubyte" | "u8" => Some(TokenKind::TypeUbyte),
             "ushort" | "u16" => Some(TokenKind::TypeUshort),
             "uint" | "u32" => Some(TokenKind::TypeUint),

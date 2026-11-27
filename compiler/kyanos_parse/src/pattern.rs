@@ -7,13 +7,26 @@
 //! Pattern and destructuring binding target parser routines for Kyanos.
 
 use kyanos_ast::{
-    BindingTarget, Ident, LiteralSign, ObjectPatternProp, Pattern, StructFieldPattern,
-    TuplePatternElement, TypeName, VarModifier,
+    BindingTarget, Ident, Literal, LiteralSign, ObjectMatchProp, ObjectPatternProp, Pattern, Span,
+    StructFieldPattern, TuplePatternElement, TypeName, VarModifier,
 };
 use kyanos_lexer::TokenKind;
 
 use crate::error::{ParseError, ParseResult};
 use crate::Parser;
+
+enum FieldPatternEntry {
+    Field {
+        name: Ident,
+        pattern: Pattern,
+        span: Span,
+    },
+    Binding {
+        modifier: Option<VarModifier>,
+        name: Ident,
+        span: Span,
+    },
+}
 
 impl<'a> Parser<'a> {
     /// Parses a binding target: `Identifier | Underscore | tuplePattern | objectPattern`.
@@ -40,7 +53,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::OpenBracket => {
                 let open = tok.span;
-                let elements = self.parse_tuple_pattern_elements()?;
+                let elements = self.parse_tuple_pattern_elements(true)?;
                 let span = self.span_from(open);
                 Ok(BindingTarget::tuple(elements, span))
             }
@@ -56,13 +69,17 @@ impl<'a> Parser<'a> {
 
     /// Parses a match pattern used in `switch` arms and tuple destructuring.
     pub fn parse_pattern(&mut self) -> ParseResult<Pattern> {
+        self.parse_pattern_with_defaults(false)
+    }
+
+    fn parse_pattern_with_defaults(&mut self, allow_object_defaults: bool) -> ParseResult<Pattern> {
         self.enter_recursion()?;
-        let res = self.parse_pattern_inner();
+        let res = self.parse_pattern_inner(allow_object_defaults);
         self.exit_recursion();
         res
     }
 
-    fn parse_pattern_inner(&mut self) -> ParseResult<Pattern> {
+    fn parse_pattern_inner(&mut self, allow_object_defaults: bool) -> ParseResult<Pattern> {
         let tok = self.current();
         match tok.kind {
             TokenKind::Underscore => {
@@ -96,14 +113,21 @@ impl<'a> Parser<'a> {
             }
             TokenKind::OpenBracket => {
                 let open = tok.span;
-                let elements = self.parse_tuple_pattern_elements()?;
+                let elements = self.parse_tuple_pattern_elements(allow_object_defaults)?;
                 let span = self.span_from(open);
                 let id = self.alloc_id();
                 Ok(Pattern::tuple(elements, span).with_id(id))
             }
+            TokenKind::OpenParen if self.peek_kind(1) == TokenKind::CloseParen => {
+                let open = self.bump();
+                self.bump();
+                let span = self.span_from(open.span);
+                let id = self.alloc_id();
+                Ok(Pattern::literal(Literal::unit(span), span).with_id(id))
+            }
             TokenKind::OpenBrace => {
                 let open = tok.span;
-                let props = self.parse_object_pattern_props()?;
+                let props = self.parse_object_match_props(allow_object_defaults)?;
                 let span = self.span_from(open);
                 let id = self.alloc_id();
                 Ok(Pattern::object(props, span).with_id(id))
@@ -205,31 +229,125 @@ impl<'a> Parser<'a> {
             return Ok(StructFieldPattern::Rest(ellipsis.span));
         }
 
+        match self.parse_named_field_or_binding("struct field pattern")? {
+            FieldPatternEntry::Field {
+                name,
+                pattern,
+                span,
+            } => Ok(StructFieldPattern::Field {
+                name,
+                pattern,
+                span,
+            }),
+            FieldPatternEntry::Binding {
+                modifier,
+                name,
+                span,
+            } => Ok(StructFieldPattern::Binding {
+                modifier,
+                name,
+                span,
+            }),
+        }
+    }
+
+    fn parse_object_match_props(
+        &mut self,
+        allow_defaults: bool,
+    ) -> ParseResult<Vec<ObjectMatchProp>> {
+        self.expect(TokenKind::OpenBrace, "'{'")?;
+        let props = self.with_grouping(|p| {
+            let mut props = Vec::new();
+            while !p.at(TokenKind::CloseBrace) && !p.is_eof() {
+                props.push(p.parse_object_match_prop(allow_defaults)?);
+                if p.eat(TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+            Ok::<_, ParseError>(props)
+        })?;
+        self.expect(TokenKind::CloseBrace, "'}'")?;
+        Ok(props)
+    }
+
+    fn parse_object_match_prop(&mut self, allow_defaults: bool) -> ParseResult<ObjectMatchProp> {
+        if let Some(ellipsis) = self.eat(TokenKind::Ellipsis) {
+            let target = if self.at(TokenKind::Identifier) {
+                let target_tok = self.bump();
+                Some(Ident::new(self.slice(target_tok.span), target_tok.span))
+            } else {
+                None
+            };
+            let span = self.span_from(ellipsis.span);
+            return Ok(ObjectMatchProp::Rest { target, span });
+        }
+
+        let entry = self.parse_named_field_or_binding("object property pattern")?;
+        let default = if allow_defaults && self.eat(TokenKind::Assign).is_some() {
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+
+        match entry {
+            FieldPatternEntry::Field {
+                name,
+                pattern,
+                span,
+            } => {
+                let full_span = self.span_from(span);
+                Ok(ObjectMatchProp::Field {
+                    name,
+                    pattern,
+                    default,
+                    span: full_span,
+                })
+            }
+            FieldPatternEntry::Binding {
+                modifier,
+                name,
+                span,
+            } => {
+                let full_span = self.span_from(span);
+                Ok(ObjectMatchProp::Binding {
+                    modifier,
+                    name,
+                    default,
+                    span: full_span,
+                })
+            }
+        }
+    }
+
+    fn parse_named_field_or_binding(
+        &mut self,
+        expected_label: &str,
+    ) -> ParseResult<FieldPatternEntry> {
         if self.at(TokenKind::Let) || self.at(TokenKind::Const) {
             let mod_tok = self.current();
             let modifier = self.parse_var_modifier_token();
             let name_tok = self.expect(TokenKind::Identifier, "field identifier")?;
             let name = Ident::new(self.slice(name_tok.span), name_tok.span);
             let span = self.span_from(mod_tok.span);
-            return Ok(StructFieldPattern::Binding {
+            return Ok(FieldPatternEntry::Binding {
                 modifier: Some(modifier),
                 name,
                 span,
             });
         }
 
-        let name_tok = self.expect(TokenKind::Identifier, "struct field pattern")?;
+        let name_tok = self.expect(TokenKind::Identifier, expected_label)?;
         let name = Ident::new(self.slice(name_tok.span), name_tok.span);
         if self.eat(TokenKind::Colon).is_some() {
             let pattern = self.parse_pattern()?;
             let span = self.span_from(name_tok.span);
-            Ok(StructFieldPattern::Field {
+            Ok(FieldPatternEntry::Field {
                 name,
                 pattern,
                 span,
             })
         } else {
-            Ok(StructFieldPattern::Binding {
+            Ok(FieldPatternEntry::Binding {
                 modifier: None,
                 name,
                 span: name_tok.span,
@@ -237,17 +355,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_tuple_pattern_elements(&mut self) -> ParseResult<Vec<TuplePatternElement>> {
+    fn parse_tuple_pattern_elements(
+        &mut self,
+        allow_object_defaults: bool,
+    ) -> ParseResult<Vec<TuplePatternElement>> {
         self.expect(TokenKind::OpenBracket, "'['")?;
         let list = self.with_grouping(|p| {
             let mut list = Vec::new();
             while !p.at(TokenKind::CloseBracket) && !p.is_eof() {
                 if let Some(ellipsis) = p.eat(TokenKind::Ellipsis) {
-                    let pat = p.parse_pattern()?;
+                    let pat = p.parse_pattern_with_defaults(allow_object_defaults)?;
                     let span = p.span_from(ellipsis.span);
                     list.push(TuplePatternElement::rest(pat, span));
                 } else {
-                    let pat = p.parse_pattern()?;
+                    let pat = p.parse_pattern_with_defaults(allow_object_defaults)?;
                     list.push(TuplePatternElement::normal(pat));
                 }
                 if p.eat(TokenKind::Comma).is_none() {

@@ -72,7 +72,7 @@
     - メソッド内で自身のフィールドを変更する場合、コンパイラが静的に自動検知。
     - `const` で宣言されたインスタンスから変更メソッドを呼び出すとコンパイルエラー（`let` で宣言された可変インスタンスからのみ呼び出し可能）。
   - **継承の禁止 (C# 方式)**:
-    - `struct` の継承（`extends`）は禁止（構文エラー）。メモリの断片化やスライシングを防ぎ、再利用には合成（Composition）、多態性には `interface` 適合を用いる。
+    - `struct` の継承（`extends`）は禁止（構文エラー）。メモリの断片化やスライシングを防ぎ、再利用には合成（Composition）、多態性には `interface` 適合（構造的型付けまたは明示的な `implements`）を用いる。
 * **インターフェース (`interface`) — 構造的型付け (Structural Typing)**:
   - TypeScriptの Duck Typing と同様、要求する形状（プロパティ・メソッド）を満たしていれば、明示的な `implements` なしに `class` や `struct` を渡すことが可能。
   - **ディスパッチ方式とメモリモデル**:
@@ -144,7 +144,7 @@ flowchart BT
 
 ### 3.3 プリミティブ型一覧
 プリミティブ型は C# 風の型名と Rust 風のエイリアス () 内のどちらでも定義可能。
-- **整数型**: `byte(i8)`, `short(i16)`, `int(i32)`, `long(i64)`, `size_t(isize)` / `ubyte(u8)`, `ushort(u16)`, `uint(u32)`, `ulong(u64)`
+- **整数型**: `byte(i8)`, `short(i16)`, `int(i32)`, `long(i64)`, `isize` / `ubyte(u8)`, `ushort(u16)`, `uint(u32)`, `ulong(u64)`, `size_t(usize)`
 - **浮動小数点数**: `float(f32)`, `double(f64)`
 - **真偽値**: `bool` (`true`, `false`)
 - **文字・文字列**: `char` (UTF-32/Unicode スカラー値: 4バイト), `string` (フレキシブル内部表現、ORC管理ヒープ文字列)

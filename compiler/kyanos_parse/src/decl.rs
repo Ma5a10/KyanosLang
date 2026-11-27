@@ -427,6 +427,14 @@ impl<'a> Parser<'a> {
             None
         };
 
+        self.reject_struct_extends();
+        let implements = if self.eat(TokenKind::Implements).is_some() {
+            self.parse_type_reference_list()?
+        } else {
+            Vec::new()
+        };
+        self.reject_struct_extends();
+
         self.expect(TokenKind::OpenBrace, "'{'")?;
         let mut members = Vec::new();
         while !self.at(TokenKind::CloseBrace) && !self.is_eof() {
@@ -450,10 +458,30 @@ impl<'a> Parser<'a> {
             attributes,
             name,
             type_parameters,
+            implements,
             members,
             span,
         ))
         .with_id(id))
+    }
+
+    fn reject_struct_extends(&mut self) {
+        if let Some(ext_tok) = self.eat(TokenKind::Extends) {
+            self.report_error(
+                ParseError::syntax(
+                    "Structs cannot inherit from another struct or class via 'extends'",
+                    ext_tok.span,
+                )
+                .with_hint("Use composition or 'implements <Interface>' instead."),
+            );
+            while !self.at(TokenKind::Implements)
+                && !self.at(TokenKind::OpenBrace)
+                && !self.at(TokenKind::CloseBrace)
+                && !self.is_eof()
+            {
+                self.bump();
+            }
+        }
     }
 
     fn parse_struct_member(&mut self) -> ParseResult<StructMember> {

@@ -257,8 +257,8 @@ fn test_primitive_types() {
         ]
     );
 
-    // Rust-like aliases
-    let aliases = tokenize("i8 i16 i32 i64 isize u8 u16 u32 u64 f32 f64").unwrap();
+    // Rust-like aliases (`isize` signed, `usize` unsigned alias for `size_t`)
+    let aliases = tokenize("i8 i16 i32 i64 isize u8 u16 u32 u64 usize f32 f64").unwrap();
     assert_eq!(
         aliases,
         vec![
@@ -266,11 +266,12 @@ fn test_primitive_types() {
             TokenKind::TypeShort,
             TokenKind::TypeInt,
             TokenKind::TypeLong,
-            TokenKind::TypeSizeT,
+            TokenKind::TypeIsize,
             TokenKind::TypeUbyte,
             TokenKind::TypeUshort,
             TokenKind::TypeUint,
             TokenKind::TypeUlong,
+            TokenKind::TypeSizeT,
             TokenKind::TypeFloat,
             TokenKind::TypeDouble,
         ]
